@@ -453,6 +453,8 @@ public:
 	void reconstitute(AICommandParms& parms) const;
 	void doXfer(Xfer *xfer);
 	AICommandType getCommandType() const { return m_cmd; }
+	const Coord3D* getPosition() const { return &m_pos; }	///< Hypersonic @feature (D-039)
+	ObjectID getObjectID() const { return m_obj; }				///< Hypersonic @feature (D-039)
 };
 
 /**

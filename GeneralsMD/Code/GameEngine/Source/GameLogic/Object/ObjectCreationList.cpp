@@ -55,6 +55,7 @@
 #include "GameLogic/Locomotor.h"
 #include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Module/ContainModule.h"
+#include "GameLogic/Module/CruiseFlightUpdate.h"
 #include "GameLogic/Module/DeliverPayloadAIUpdate.h"
 #include "GameLogic/Module/FloatUpdate.h"
 #include "GameLogic/Module/PhysicsUpdate.h"
@@ -259,6 +260,7 @@ public:
 		m_payload.clear();
 		m_putInContainerName.clear();
 		m_transportName.clear();
+		m_patternScatterWeaponName.clear();
 	}
 
 	virtual Object* create(const Object *primaryObj, const Coord3D *primary, const Coord3D *secondary, Real angle, UnsignedInt lifetimeFrames = 0 ) const override
@@ -310,6 +312,64 @@ public:
 			CWy = dx * s + dy * c + dy;
 		}
 
+		// Hypersonic @feature fixed spread pattern (Generals Hypersonic D-152, ring D-212): with PatternScatterWeapon each
+		// member aims at its own spot: one at the target, the others evenly on a circle of that weapon's base scatter
+		// radius around it (Guidance does not shrink it: a planned pattern, not a miss). Spots are taken front to back, so member n is
+		// n x PATTERN_STAGGER x spacing behind the lead and lands after (and behind) the ones before it: never two blasts
+		// at once, never a warhead flying over an earlier blast (one warhead killing its neighbour in the air). Each flies
+		// in the lane of its spot's side, widened so the outermost lane is (size / 2) x spacing out, so the warheads
+		// never cross. No random draw (the fired weapon should have no scatter of its own). Without it: the stock V and
+		// convergence below.
+		enum { PATTERN_MAX = 32 };
+		Bool pattern = FALSE;
+		Real patternSpotSide[ PATTERN_MAX ], patternSpotFwd[ PATTERN_MAX ];
+		Real patternLane = 0.0f;
+		Real backX = 0.0f, backY = 0.0f;
+		const Real PATTERN_STAGGER = 1.25f;
+		if( m_patternScatterWeaponName.isNotEmpty() && m_formationSize > 1 && m_formationSize <= PATTERN_MAX && TheWeaponStore != nullptr )
+		{
+			const WeaponTemplate *patternWeapon = TheWeaponStore->findWeaponTemplate( m_patternScatterWeaponName );
+			DEBUG_ASSERTCRASH( patternWeapon != nullptr, ("DeliverPayload: unknown PatternScatterWeapon '%s'", m_patternScatterWeaponName.str()) );
+			Real bx = primary->x - secondary->x;
+			Real by = primary->y - secondary->y;
+			Real len = sqrtf( bx * bx + by * by );
+			Real outerLane = (Real)( m_formationSize / 2 ) * m_formationSpacing;
+			Real radius = patternWeapon != nullptr ? patternWeapon->getScatterRadius() : 0.0f;	// the base: Guidance does not shrink the pattern (D-212)
+			if( len > 0.0f && outerLane > 0.0f && radius > 0.0f )
+			{
+				pattern = TRUE;
+				backX = bx / len;
+				backY = by / len;
+				patternLane = outerLane / radius;
+				// the centre spot, then the ring: angle from the flight direction, turned half a step so an even ring
+				// has a flat front (2: left and right; 4: a square; 6: a hexagon with a pair in front)
+				UnsignedInt ring = m_formationSize - 1;
+				patternSpotSide[ 0 ] = 0.0f;
+				patternSpotFwd[ 0 ] = 0.0f;
+				for( UnsignedInt k = 0; k < ring; ++k )
+				{
+					Real angle = ( 2.0f * (Real)k + 1.0f ) * PI / (Real)ring;
+					patternSpotSide[ k + 1 ] = radius * Sin( angle );
+					patternSpotFwd[ k + 1 ] = radius * Cos( angle );
+				}
+				// front to back; one row (same depth) from the positive side to the negative
+				for( UnsignedInt i = 1; i < m_formationSize; ++i )
+				{
+					Real s = patternSpotSide[ i ], f = patternSpotFwd[ i ];
+					Int j = (Int)i - 1;
+					while( j >= 0 && ( patternSpotFwd[ j ] < f - 0.5f
+						|| ( patternSpotFwd[ j ] <= f + 0.5f && patternSpotSide[ j ] < s ) ) )
+					{
+						patternSpotSide[ j + 1 ] = patternSpotSide[ j ];
+						patternSpotFwd[ j + 1 ] = patternSpotFwd[ j ];
+						--j;
+					}
+					patternSpotSide[ j + 1 ] = s;
+					patternSpotFwd[ j + 1 ] = f;
+				}
+			}
+		}
+
 		Object *firstTransport = nullptr;
 		for( UnsignedInt formationIndex = 0; formationIndex < m_formationSize; formationIndex++ )
 		{
@@ -331,6 +391,16 @@ public:
 				offset.y = CWy * offsetMultiplier;
 			}
 
+			// Hypersonic @feature fixed spread pattern (D-152, D-212): the spot's lane, staggered back (see above); its aim
+			// spot below
+			if( pattern )
+			{
+				Real sideDist = patternSpotSide[ formationIndex ] * patternLane;
+				Real backDist = (Real)formationIndex * PATTERN_STAGGER * m_formationSpacing;
+				offset.x = -backY * sideDist + backX * backDist;
+				offset.y = backX * sideDist + backY * backDist;
+			}
+
 			Coord3D startPos = *primary;
 			Coord3D moveToPos = *secondary;
 			startPos.add( offset );
@@ -343,8 +413,17 @@ public:
 			//Our target position only applies when using fireweapon and when we have multiple planes,
 			//as is the case with the napalm strike. The target position either be somewhere between the
 			//moveToPos of the lead plane and that of the relative offset -- determined by the convergenceFactor.
-			targetPos.x += offset.x * (1.0f - m_convergenceFactor);
-			targetPos.y += offset.y * (1.0f - m_convergenceFactor);
+			if( pattern )
+			{
+				// Hypersonic @feature fixed spread pattern (D-152, D-212): its spot (forward = against the back direction)
+				targetPos.x += -backY * patternSpotSide[ formationIndex ] - backX * patternSpotFwd[ formationIndex ];
+				targetPos.y += backX * patternSpotSide[ formationIndex ] - backY * patternSpotFwd[ formationIndex ];
+			}
+			else
+			{
+				targetPos.x += offset.x * (1.0f - m_convergenceFactor);
+				targetPos.y += offset.y * (1.0f - m_convergenceFactor);
+			}
 
 
 			// first guy in each formation is always spot-on (to keep targeting cursor well-matched)
@@ -428,7 +507,9 @@ public:
 				DeliverPayloadData data = m_data;
 				if (formationIndex != 0)
 					data.m_deliveryDecalRadius = 0;
-				ai->deliverPayload( &moveToPos, &targetPos, &data );
+				// Hypersonic @feature fixed spread pattern (Generals Hypersonic D-221): the spots are sorted front to back, so
+				// the decal-carrying first member aims at a ring spot; draw its decal at the clicked target instead
+				ai->deliverPayload( &moveToPos, &targetPos, &data, pattern ? secondary : nullptr );
 				if( m_startAtPreferredHeight && createOwner )
 				{
 					startPos.z = TheTerrainLogic->getGroundHeight(startPos.x, startPos.y) + ai->getCurLocomotor()->getPreferredHeight();
@@ -537,6 +618,7 @@ public:
 			{ "WeaponConvergenceFactor",	INI::parseReal,									nullptr, offsetof( DeliverPayloadNugget, m_convergenceFactor ) },
 			{ "WeaponErrorRadius",				INI::parseReal,									nullptr, offsetof( DeliverPayloadNugget, m_errorRadius ) },
 			{ "DelayDeliveryMax",					INI::parseDurationUnsignedInt,	nullptr, offsetof( DeliverPayloadNugget, m_delayDeliveryFramesMax ) },
+			{ "PatternScatterWeapon",			INI::parseAsciiString,				nullptr, offsetof( DeliverPayloadNugget, m_patternScatterWeaponName ) },	// Hypersonic @feature (D-152)
 
 			//Payload information (it's all created now and stored inside)
 			{ "Payload",									parsePayload,									nullptr, 0 },
@@ -570,6 +652,7 @@ private:
 	//Specific data needed to create the transport(s), internal payload, and initial physics.
   AsciiString           m_transportName;
 	AsciiString						m_putInContainerName;
+	AsciiString						m_patternScatterWeaponName;	///< Hypersonic @feature fixed spread pattern (D-152)
 	std::vector<Payload>	m_payload;
 	Real									m_formationSpacing;
 	Real									m_convergenceFactor;
@@ -1032,6 +1115,18 @@ protected:
 			if( sourcePhysics && objectPhysics )
 			{
 				objectPhysics->applyForce( sourcePhysics->getVelocity() );
+			}
+			// Hypersonic @feature (D-149) a CruiseFlightUpdate drone has no physics: inherit its flight velocity
+			else if( objectPhysics )
+			{
+				const CruiseFlightUpdate *flight = CruiseFlightUpdate::findFlight( sourceObj );
+				if( flight )
+				{
+					Coord3D vel;
+					flight->getFlightVelocity( &vel );
+					vel.scale( objectPhysics->getMass() );	// applyForce divides by the mass
+					objectPhysics->applyForce( &vel );
+				}
 			}
 		}
 

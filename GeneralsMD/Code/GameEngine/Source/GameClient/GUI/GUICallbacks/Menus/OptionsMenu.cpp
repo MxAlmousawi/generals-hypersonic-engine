@@ -124,6 +124,10 @@ static GameWindow *		checkDrawAnchor			= nullptr;
 static NameKeyType		checkMoveAnchorID		= NAMEKEY_INVALID;
 static GameWindow *		checkMoveAnchor			= nullptr;
 
+// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223)
+static NameKeyType		comboBoxCameraZoomOutID	= NAMEKEY_INVALID;
+static GameWindow *		comboBoxCameraZoomOut		= nullptr;
+
 static NameKeyType		buttonFirewallRefreshID	= NAMEKEY_INVALID;
 static GameWindow *		buttonFirewallRefresh		= nullptr;
 //
@@ -230,6 +234,11 @@ static void setDefaults()
 	//-------------------------------------------------------------------------------------------------
 	// language filter
 	GadgetCheckBoxSetChecked( checkLanguageFilter, TRUE );
+
+	//-------------------------------------------------------------------------------------------------
+	// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): 550, GameData.ini's (D-145)
+	if( comboBoxCameraZoomOut )
+		GadgetComboBoxSetSelectedPos( comboBoxCameraZoomOut, OptionPreferences::getCameraZoomOutDefaultIndex() );
 
 	if constexpr (ModifyDisplaySettings)
 	{
@@ -398,6 +407,22 @@ static void saveOptions()
 			(*pref)["LanguageFilter"] = "false";
 	}
 
+
+	//-------------------------------------------------------------------------------------------------
+	// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): saved as the height, applied at once
+	// (in game too; client only, so every player may pick his own, online and on LAN)
+	if( comboBoxCameraZoomOut )
+	{
+		GadgetComboBoxGetSelectedPos( comboBoxCameraZoomOut, &index );
+		if( index >= 0 && index < OptionPreferences::getCameraZoomOutChoiceCount() )
+		{
+			const Real height = OptionPreferences::getCameraZoomOutChoice( index );
+			AsciiString prefString;
+			prefString.format( "%d", (Int)height );
+			(*pref)["CameraZoomOut"] = prefString;
+			OptionPreferences::applyCameraZoomOut( height );
+		}
+	}
 
 	//-------------------------------------------------------------------------------------------------
 	// Custom game detail settings.
@@ -939,6 +964,10 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 	if (TheGameEngine->getQuitting())
 		return;
 	OptionsLayout = layout;
+	// Hypersonic @fix (D-258): a Ctrl + wheel zoom-out change still waiting for its delayed save is written first, so
+	// the menu reads (and an Accept keeps) the new value
+	if (TheLookAtTranslator)
+		TheLookAtTranslator->flushZoomOutChange();
 	if (!pref)
 	{
 		pref = NEW OptionPreferences;
@@ -1252,6 +1281,32 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 	GadgetComboBoxAddEntry(comboBoxDetail, TheGameText->FETCH_OR_SUBSTITUTE("GUI:VeryHigh", L"Very High"), color);
 	GadgetComboBoxAddEntry(comboBoxDetail, TheGameText->fetch("GUI:Custom"), color);
 	static_assert(STATIC_GAME_LOD_COUNT == 5, "Wrong combo box count");
+
+	// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): the current MaxCameraHeight's choice
+	comboBoxCameraZoomOutID = TheNameKeyGenerator->nameToKey( "OptionsMenu.wnd:ComboBoxCameraZoomOut" );
+	comboBoxCameraZoomOut = TheWindowManager->winGetWindowFromId( nullptr, comboBoxCameraZoomOutID );
+	if( comboBoxCameraZoomOut )
+	{
+		GadgetComboBoxReset( comboBoxCameraZoomOut );
+		// D-258: every choice (310, 350 ... 850; 6 rows shown, the list scrolls); only 310 and 550 carry a name
+		GadgetComboBoxSetMaxDisplay( comboBoxCameraZoomOut, 6 );
+		const Int defaultIndex = OptionPreferences::getCameraZoomOutDefaultIndex();
+		for( Int i = 0; i < OptionPreferences::getCameraZoomOutChoiceCount(); ++i )
+		{
+			UnicodeString entry;
+			if( i == 0 )
+				entry = TheGameText->FETCH_OR_SUBSTITUTE( "GUI:HypersonicCameraZoomOut310", L"310 (Classic)" );
+			else if( i == defaultIndex )
+				entry = TheGameText->FETCH_OR_SUBSTITUTE( "GUI:HypersonicCameraZoomOut550", L"550 (Default)" );
+			else
+				entry.format( L"%d", (Int)OptionPreferences::getCameraZoomOutChoice( i ) );
+			GadgetComboBoxAddEntry( comboBoxCameraZoomOut, entry, color );
+		}
+		// the saved choice (in the main menu the running height is the shell map's 550, D-223), else the current one
+		const Real saved = pref->getCameraZoomOut();
+		GadgetComboBoxSetSelectedPos( comboBoxCameraZoomOut,
+			OptionPreferences::findCameraZoomOutIndex( saved > 0.0f ? saved : TheGlobalData->m_maxCameraHeight ) );
+	}
 
 	//Check if level was never set and default to setting most suitable for system.
 	if (TheGameLODManager->getStaticLODLevel() == STATIC_GAME_LOD_UNKNOWN)

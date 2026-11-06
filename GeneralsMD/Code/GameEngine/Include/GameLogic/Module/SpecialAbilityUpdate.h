@@ -76,6 +76,8 @@ public:
 	Bool									m_approachRequiresLOS;
   Bool                  m_needToFaceTarget;
   Bool                  m_persistenceRequiresRecharge;
+  Int                   m_salvoShots;       ///< Hypersonic D-253: missiles per Almas strike (1 = stock behaviour)
+  UnsignedInt           m_salvoDelayFrames; ///< Hypersonic D-253: frames between the salvo's missiles
 
 	const ParticleSystemTemplate *m_disableFXParticleSystem;
 	AudioEventRTS					m_packSound;
@@ -113,6 +115,8 @@ public:
 		m_preTriggerUnstealthFrames = 0;
     m_needToFaceTarget = TRUE;
     m_persistenceRequiresRecharge = FALSE;
+    m_salvoShots = 1;
+    m_salvoDelayFrames = 0;
 	}
 
 	static void buildFieldParse(MultiIniFieldParse& p)
@@ -159,6 +163,8 @@ public:
 			{ "ApproachRequiresLOS",				INI::parseBool,										nullptr, offsetof( SpecialAbilityUpdateModuleData, m_approachRequiresLOS ) },
       { "NeedToFaceTarget",           INI::parseBool,										nullptr, offsetof( SpecialAbilityUpdateModuleData, m_needToFaceTarget ) },
       { "PersistenceRequiresRecharge",INI::parseBool,										nullptr, offsetof( SpecialAbilityUpdateModuleData, m_persistenceRequiresRecharge ) },
+      { "SalvoShots",                 INI::parseInt,										nullptr, offsetof( SpecialAbilityUpdateModuleData, m_salvoShots ) },    // Hypersonic D-253
+      { "SalvoDelay",                 INI::parseDurationUnsignedInt,		nullptr, offsetof( SpecialAbilityUpdateModuleData, m_salvoDelayFrames ) }, // Hypersonic D-253
 			{ 0, 0, 0, 0 }
 		};
     p.add(dataFieldParse);
@@ -251,7 +257,7 @@ protected:
 
 	UpdateSleepTime calcSleepTime()
 	{
-		return (m_active || getSpecialAbilityUpdateModuleData()->m_alwaysValidateSpecialObjects) ? UPDATE_SLEEP_NONE : UPDATE_SLEEP_FOREVER;
+		return (m_active || m_salvoLeft > 0 || getSpecialAbilityUpdateModuleData()->m_alwaysValidateSpecialObjects) ? UPDATE_SLEEP_NONE : UPDATE_SLEEP_FOREVER;
 	}
 
 private:
@@ -276,6 +282,13 @@ private:
 	Real													m_captureFlashPhase;    ///< used to track the accelerating flash of the capture FX
 	PackingState									m_packingState;
 	Bool													m_active;
+	Int														m_salvoLeft;       ///< Hypersonic D-253: missiles still to fire after the first one
+	UnsignedInt										m_salvoNextFrame;
+	ObjectID											m_salvoTargetID;
+	Coord3D												m_salvoTargetPos;
+	Bool													fireAlmasMissile(ObjectID targetID, const Coord3D& pos); ///< Hypersonic D-253: one Almas shot, true when it left
+	void													markAlmasSalvoDone(); ///< Hypersonic D-254: starts the ability's cooldown clock after the last missile
+	void													updateAlmasSalvo();
 	Bool													m_noTargetCommand;
 	Bool													m_facingInitiated;
 	Bool													m_facingComplete;

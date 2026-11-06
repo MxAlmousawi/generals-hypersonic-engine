@@ -34,6 +34,10 @@
 #include "GameClient/Shell.h"
 #include "GameNetwork/FileTransfer.h"
 #include "GameNetwork/networkutil.h"
+#if RTS_ZEROHOUR
+#include "Common/GameState.h"	// Hypersonic @feature (D-146)
+#include "GameClient/MapUtil.h"
+#endif
 
 //-------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------
@@ -256,6 +260,19 @@ Bool DoAnyMapTransfers(GameInfo *game)
 	}
 	if (!mask)
 		return TRUE;
+
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-146) a receiver whose vanilla Zero Hour copy of the map does not match gets the host's map
+	// written into our own user Maps folder (ConnectionManager::processFile/processFileAnnounce): switch to that path
+	// before the transfer, so the progress lookups by file name match the announced names, and play that copy.
+	const Int localSlot = game->getLocalSlotNum();
+	if (!game->amIHost() && localSlot >= 0 && !game->getConstSlot(localSlot)->hasMap() && TheMapCache->isVanillaUserMap(game->getMap()))
+	{
+		AsciiString ownMap = TheGameState->portableMapPathToRealMapPath(TheGameState->realMapPathToPortableMapPath(game->getMap()), TRUE);
+		if (!ownMap.isEmpty())
+			game->setMap(ownMap);
+	}
+#endif
 
 	TheShell->hideShell();
 	MapTransferLoadScreen *ls = NEW MapTransferLoadScreen;

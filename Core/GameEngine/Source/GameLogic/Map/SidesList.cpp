@@ -476,6 +476,74 @@ static Bool ParseTeamsDataChunk(DataChunkInput &file, DataChunkInfo *info, void 
 	return true;
 }
 
+// Hypersonic @feature (D-146 part B): only the teams of this player are taken from the standard skirmish scripts
+static AsciiString static_onlyTeamsOfPlayer;
+
+static Bool ParseTeamsOfOnePlayerDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData)
+{
+	SidesList *sides = (SidesList *)userData;
+	while (!file.atEndOfChunk()) {
+		Dict teamDict = file.readDict();
+		AsciiString teamName = teamDict.getAsciiString(TheKey_teamName);
+		AsciiString player = teamDict.getAsciiString(TheKey_teamOwner);
+		if (player != static_onlyTeamsOfPlayer || !sides->findSkirmishSideInfo(player))
+			continue;
+		Bool exists = false;
+		for (Int i = 0; i < sides->getNumSkirmishTeams(); ++i) {
+			if (sides->getSkirmishTeamInfo(i)->getDict()->getAsciiString(TheKey_teamName) == teamName) {
+				exists = true;
+				break;
+			}
+		}
+		if (!exists)
+			sides->addSkirmishTeam(&teamDict);
+	}
+	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	return true;
+}
+
+void SidesList::loadStandardSkirmishScriptsForSide(const AsciiString& playerName)
+{
+	Int sideIndex = -1;
+	SidesInfo *side = findSkirmishSideInfo(playerName, &sideIndex);
+	if (side == nullptr)
+		return;
+
+	if (side->getScriptList() == nullptr)
+	{
+		AsciiString path = "data\\Scripts\\SkirmishScripts.scb";
+		CachedFileInputStream theInputStream;
+		if (theInputStream.open(path)) {
+			ChunkInputStream *pStrm = &theInputStream;
+			DataChunkInput file( pStrm );
+			static_onlyTeamsOfPlayer = playerName;
+			file.registerParser( "PlayerScriptsList", AsciiString::TheEmptyString, ScriptList::ParseScriptsDataChunk );
+			file.registerParser( "ScriptsPlayers", AsciiString::TheEmptyString, ParsePlayersDataChunk );
+			file.registerParser( "ScriptTeams", AsciiString::TheEmptyString, ParseTeamsOfOnePlayerDataChunk );
+			Bool parsed = file.parse(this);
+			static_onlyTeamsOfPlayer.clear();
+			ScriptList *scripts[MAX_PLAYER_COUNT];
+			Int count = ScriptList::getReadScripts(scripts);
+			for (Int i = 0; i < count; i++) {
+				if (parsed && side->getScriptList() == nullptr && static_readPlayerNames[i] == playerName) {
+					side->setScriptList(scripts[i]);
+				} else {
+					deleteInstance(scripts[i]);
+				}
+				scripts[i] = nullptr;
+			}
+			for (Int j = 0; j < MAX_PLAYER_COUNT; j++) {
+				static_readPlayerNames[j].clear();
+			}
+			DEBUG_ASSERTCRASH(parsed, ("ERROR - Unable to read in skirmish scripts for %s.", playerName.str()));
+		}
+	}
+
+	// never leave the side without a script list (Player::initFromDict duplicates it unconditionally)
+	if (side->getScriptList() == nullptr)
+		side->setScriptList(newInstance(ScriptList));
+}
+
 void SidesList::prepareForMP_or_Skirmish()
 {
 	m_skirmishTeamrec.clear();

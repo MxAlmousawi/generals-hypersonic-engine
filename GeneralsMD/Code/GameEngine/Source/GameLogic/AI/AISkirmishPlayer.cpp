@@ -43,6 +43,8 @@
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/AISkirmishPlayer.h"
+#include "GameLogic/HypersonicScenario.h"
+#include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/SidesList.h"
 #include "GameLogic/AI.h"
 #include "GameLogic/AIPathfind.h"
@@ -79,6 +81,7 @@ m_currentEnemy(nullptr)
 
 {
 	m_frameLastBuildingBuilt = TheGameLogic->getFrame();
+	m_iranRoadCount = 0;
 	p->setCanBuildUnits(true); // turn on ai production by default.
 }
 
@@ -186,7 +189,11 @@ void AISkirmishPlayer::processBaseBuilding()
 					continue;
 				}	else {
 					DEBUG_LOG(("Enabling rebuild for %s", info->getTemplateName().str()));
-					info->setObjectTimestamp(0); // ready to build.
+					// Hypersonic @bugfix (D-174) a lost Iran defense keeps the frame it was lost at, a fresh Iran defense
+					// order its creation stamp (saved with the build list), so one that never gets built can be given up
+					// (releaseIranStaleRebuild)
+					if (!(m_player->getSide() == "Iran" && (isIranDefenseRebuild(info) || isIranFreshOrder(info))))
+						info->setObjectTimestamp(0); // ready to build.
 				}
 			}
 			if (bldg) {
@@ -194,6 +201,11 @@ void AISkirmishPlayer::processBaseBuilding()
 			}
 			// Make sure it is safe to build here.
 			if (!isLocationSafe(info->getLocation(), curPlan)) {
+				continue;
+			}
+			// Hypersonic @feature (D-174) a lost Iran defense is rebuilt once it can be paid for; until then it does
+			// not hold up the rest of the base building the way a waiting priority order does
+			if (m_player->getSide() == "Iran" && isIranDefenseRebuild(info) && m_player->getMoney()->countMoney() < (UnsignedInt)curPlan->calcCostToBuild(m_player)) {
 				continue;
 			}
 			if (info->isPriorityBuild()) {
@@ -478,6 +490,13 @@ Int AISkirmishPlayer::getMyEnemyPlayerIndex() {
 */
 void AISkirmishPlayer::acquireEnemy()
 {
+	// Hypersonic @feature (D-126, D-128) Iran AIs: the closest enemy, shared by the team (stock AIs unchanged)
+	if( isIranTeamTargeting() )
+	{
+		acquireIranEnemy();
+		return;
+	}
+
 	Player *bestEnemy = nullptr;
 	Real bestDistanceSqr = HUGE_DIST*HUGE_DIST;
 
@@ -545,8 +564,165 @@ void AISkirmishPlayer::acquireEnemy()
 /**
 	Get the AI's enemy.  Recalc if it has been a while (20 seconds.)
 */
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-126, D-128) Iran AI team targeting (owner: mass into one overwhelming push, keep pushing until
+// the enemy is destroyed, then the next). Only players whose side is Iran; stock AIs keep the stock choice.
+// The team leader (the lowest-index Iran skirmish AI with objects among the mutual allies) picks; the other Iran AIs of
+// the team take its enemy. D-128 (owner: "it shouldn't target the weakest, it should target the closest"): the enemy
+// whose base (its first Command Center in the object list, else the centre of its structures) is closest to the
+// leader's base; ties: the lower player index. The current enemy is kept until it is eliminated (no objects left), then
+// the next closest. Re-evaluated every 5 s (getAiEnemy). Synced logic: object list and player order only.
+//-------------------------------------------------------------------------------------------------
+static Int s_iranEnemyDelegation = 0;	///< recursion guard: a leader asked for its enemy decides itself
+
+static Bool isIranSkirmishAI( Player *player )
+{
+	return player != nullptr && player->isSkirmishAIPlayer() && player->getSide() == "Iran";
+}
+
+Bool AISkirmishPlayer::isIranTeamTargeting() const
+{
+	return m_player != nullptr && m_player->getSide() == "Iran"
+		&& !( TheHypersonicScenario != nullptr && TheHypersonicScenario->isLegacyIranTeamTarget() );
+}
+
+Player *AISkirmishPlayer::getIranTeamLeader()
+{
+	for( Int i = 0; i < ThePlayerList->getPlayerCount(); ++i )
+	{
+		Player *p = ThePlayerList->getNthPlayer( i );
+		if( p == m_player )
+			return m_player;
+		if( !isIranSkirmishAI( p ) || p->getDefaultTeam() == nullptr || m_player->getDefaultTeam() == nullptr
+			|| !p->hasAnyObjects() )
+			continue;
+		if( m_player->getRelationship( p->getDefaultTeam() ) == ALLIES && p->getRelationship( m_player->getDefaultTeam() ) == ALLIES )
+			return p;
+	}
+	return m_player;
+}
+
+void AISkirmishPlayer::acquireIranEnemy()
+{
+	Int count = ThePlayerList->getPlayerCount();
+	if( count > MAX_PLAYER_COUNT )
+		count = MAX_PLAYER_COUNT;
+	Bool hostile[MAX_PLAYER_COUNT];
+	Bool hasCenter[MAX_PLAYER_COUNT];
+	Coord2D basePos[MAX_PLAYER_COUNT];
+	Int i;
+	for( i = 0; i < count; ++i )
+	{
+		Player *p = ThePlayerList->getNthPlayer( i );
+		hostile[i] = p != nullptr && p != m_player && p->getDefaultTeam() != nullptr
+			&& m_player->getRelationship( p->getDefaultTeam() ) == ENEMIES && p->hasAnyObjects();
+		hasCenter[i] = false;
+		basePos[i].x = basePos[i].y = 0.0f;
+	}
+	// each enemy's base: its first Command Center in the object list
+	for( Object *obj = TheGameLogic->getFirstObject(); obj; obj = obj->getNextObject() )
+	{
+		if( !obj->isKindOf( KINDOF_COMMANDCENTER ) || obj->isEffectivelyDead() )
+			continue;
+		Player *owner = obj->getControllingPlayer();
+		if( owner == nullptr )
+			continue;
+		const Int index = owner->getPlayerIndex();
+		if( index < 0 || index >= count || !hostile[index] || hasCenter[index] || ThePlayerList->getNthPlayer( index ) != owner )
+			continue;
+		hasCenter[index] = true;
+		basePos[index].x = obj->getPosition()->x;
+		basePos[index].y = obj->getPosition()->y;
+	}
+	// our base: the leader's base centre
+	Coord2D home;
+	home.x = m_baseCenter.x;
+	home.y = m_baseCenter.y;
+	if( !m_baseCenterSet )
+	{
+		Region2D bounds;
+		getPlayerStructureBounds( &bounds, m_player->getPlayerIndex(), true );
+		home.x = bounds.lo.x + bounds.width()/2;
+		home.y = bounds.lo.y + bounds.height()/2;
+	}
+	Real dist[MAX_PLAYER_COUNT];
+	Int best = -1;
+	for( i = 0; i < count; ++i )
+	{
+		dist[i] = 0.0f;
+		if( !hostile[i] )
+			continue;
+		if( !hasCenter[i] )
+		{
+			// no Command Center: the centre of its structures (stock acquireEnemy's base position)
+			Region2D bounds;
+			getPlayerStructureBounds( &bounds, i, true );
+			basePos[i].x = bounds.lo.x + bounds.width()/2;
+			basePos[i].y = bounds.lo.y + bounds.height()/2;
+		}
+		const Real dx = basePos[i].x - home.x;
+		const Real dy = basePos[i].y - home.y;
+		dist[i] = dx*dx + dy*dy;	// squared: compared only
+		if( best < 0 || dist[i] < dist[best] )	// ties: the lower index
+			best = i;
+	}
+	if( best < 0 )
+		return;	// no enemy left: keep what we have
+	const char *reason = m_currentEnemy == nullptr ? "first, closest" : "closest";
+	const Int current = m_currentEnemy != nullptr ? m_currentEnemy->getPlayerIndex() : -1;
+	if( current >= 0 && current < count && ThePlayerList->getNthPlayer( current ) == m_currentEnemy )
+	{
+		if( hostile[current] )
+			return;	// keep the current enemy until it is eliminated
+		reason = "eliminated; next closest";
+	}
+	Player *choice = ThePlayerList->getNthPlayer( best );
+	if( choice == m_currentEnemy )
+		return;
+	m_currentEnemy = choice;
+	if( TheHypersonicScenario != nullptr )
+	{
+		char list[512];
+		list[0] = 0;
+		for( i = 0; i < count; ++i )
+		{
+			if( !hostile[i] )
+				continue;
+			char one[64];
+			snprintf( one, sizeof( one ), " %s=%.0f%s", TheHypersonicScenario->sideLabel( ThePlayerList->getNthPlayer( i ) ),
+				(Real)sqrt( dist[i] ), hasCenter[i] ? "" : "(no CC)" );
+			strlcat( list, one, sizeof( list ) );
+		}
+		TheHypersonicScenario->noteAI( "AI TARGET %s -> %s (%s; leader) distance:%s", TheHypersonicScenario->sideLabel( m_player ),
+			TheHypersonicScenario->sideLabel( m_currentEnemy ), reason, list );
+	}
+}
+
 Player *AISkirmishPlayer::getAiEnemy()
 {
+	// Hypersonic @feature (D-126) an Iran AI that is not its team's leader takes the leader's enemy
+	if( isIranTeamTargeting() && s_iranEnemyDelegation == 0 )
+	{
+		Player *leader = getIranTeamLeader();
+		if( leader != m_player )
+		{
+			++s_iranEnemyDelegation;
+			Player *shared = leader->getCurrentEnemy();
+			--s_iranEnemyDelegation;
+			if( shared != nullptr && shared != m_player && shared->getDefaultTeam() != nullptr
+				&& m_player->getRelationship( shared->getDefaultTeam() ) == ENEMIES && shared->hasAnyObjects() )
+			{
+				if( shared != m_currentEnemy )
+				{
+					m_currentEnemy = shared;
+					if( TheHypersonicScenario != nullptr )
+						TheHypersonicScenario->noteAI( "AI TARGET %s -> %s (leader %s's enemy)", TheHypersonicScenario->sideLabel( m_player ),
+							TheHypersonicScenario->sideLabel( m_currentEnemy ), TheHypersonicScenario->sideLabel( leader ) );
+				}
+				return m_currentEnemy;
+			}
+		}
+	}
 	if (TheGameLogic->getFrame()>=m_frameToCheckEnemy) {
 		m_frameToCheckEnemy = TheGameLogic->getFrame() + 5*LOGICFRAMES_PER_SECOND;
 		acquireEnemy();
@@ -600,6 +776,11 @@ void AISkirmishPlayer::buildAIBaseDefenseStructure(const AsciiString &thingName,
 	const ThingTemplate *tTemplate = TheThingFactory->findTemplate(thingName);
 	if (tTemplate==nullptr) {
 		DEBUG_CRASH(("Couldn't find base defense structure '%s' for side %s", thingName.str(), m_player->getSide().str()));
+		return;
+	}
+	if (m_player->getSide() == "Iran")
+	{
+		buildIranBaseDefenseStructure(tTemplate, thingName, flank);
 		return;
 	}
 	do {
@@ -705,6 +886,769 @@ void AISkirmishPlayer::buildAIBaseDefenseStructure(const AsciiString &thingName,
 		}
 	}	while (true);
 
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-174) the stock ring above fills the left front arc up to 60 degrees and then fails every
+// other order, while the right side steps on round the base without a limit (later "front" defenses end up at the
+// side and behind the base). For the Iran AI each flank order (and a front order that buildIranFrontDefense below
+// cannot place) scans the arc from the attack path outwards, both sides up to 60 degrees, in up to IRAN_DEFENSE_ROWS
+// rows further out: the first legal spot no pending build order holds wins. A lost one is rebuilt at its spot once it
+// can be paid for. Front defenses: buildIranFrontDefense.
+//-------------------------------------------------------------------------------------------------
+Bool AISkirmishPlayer::isIranDefenseRebuild(BuildListInfo *info)
+{
+	// 500-999: an IRAN_DEFENSE_REBUILDS order built at least once (stock and map entries never start that high)
+	return info->isPriorityBuild() && info->getNumRebuilds() >= IRAN_DEFENSE_REBUILDS - 500
+		&& info->getNumRebuilds() < IRAN_DEFENSE_REBUILDS;
+}
+
+Bool AISkirmishPlayer::isIranFreshOrder(BuildListInfo *info)
+{
+	// IRAN_DEFENSE_REBUILDS: placed by the Iran AI, never built (starting construction takes one rebuild off)
+	return info->isPriorityBuild() && info->getNumRebuilds() == IRAN_DEFENSE_REBUILDS;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-174) stamps a fresh or moved Iran defense order with the current frame (saved with the build
+// list). The stamp is set back by the stock rebuild delay: processBaseBuilding waits that long after a stamp (it was
+// meant for lost buildings), so the order is not held up. Synced logic only.
+//-------------------------------------------------------------------------------------------------
+void AISkirmishPlayer::stampIranOrder(BuildListInfo *info)
+{
+	const UnsignedInt delayFrames = TheAI->getAiData()->m_rebuildDelaySeconds*LOGICFRAMES_PER_SECOND;
+	const UnsignedInt now = TheGameLogic->getFrame();
+	info->setObjectTimestamp(now+1 > delayFrames + 1 ? now+1 - delayFrames : 1);	// has to be non-zero
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-174) a lost Iran defense whose rebuild has not been started, or a fresh Iran defense order
+// whose construction has not been started, for IRAN_REBUILD_GIVE_UP_SECONDS (unsafe spot, no dozer, no money) is
+// given up: the entry is emptied (no template, no rebuilds), so it no longer blocks or counts against new orders or
+// holds its spot, and the next order picks a spot afresh (often the same one). The time counts from the entry's object
+// timestamp (saved with the build list; processBaseBuilding keeps it for these entries) plus the stock rebuild delay:
+// the lost frame, or the order's stamp (stampIranOrder). One without a stamp (0) starts counting now. Synced logic
+// only. Returns true when released.
+//-------------------------------------------------------------------------------------------------
+Bool AISkirmishPlayer::releaseIranStaleRebuild(BuildListInfo *info)
+{
+	static const UnsignedInt IRAN_REBUILD_GIVE_UP_SECONDS = 180;
+	// a dead object's ID stays until processBaseBuilding's next pass, which stamps the lost frame; an order whose
+	// construction has started has its object
+	const Bool fresh = isIranFreshOrder(info);
+	if (!(fresh || isIranDefenseRebuild(info)) || info->getObjectID() != INVALID_ID)
+		return FALSE;
+	if (info->getObjectTimestamp() == 0) {
+		stampIranOrder(info);
+		return FALSE;
+	}
+	const UnsignedInt delayFrames = TheAI->getAiData()->m_rebuildDelaySeconds*LOGICFRAMES_PER_SECOND;
+	const UnsignedInt now = TheGameLogic->getFrame();
+	if (info->getObjectTimestamp() + delayFrames + IRAN_REBUILD_GIVE_UP_SECONDS*LOGICFRAMES_PER_SECOND > now)
+		return FALSE;
+	if (TheHypersonicScenario != nullptr)
+		TheHypersonicScenario->noteAI("AI DEFENSE %s %s %s at %.0f %.0f not built for %d s: given up",
+			TheHypersonicScenario->sideLabel(m_player), info->getTemplateName().str(), fresh ? "order" : "lost one",
+			info->getLocation()->x, info->getLocation()->y,
+			(Int)((now - info->getObjectTimestamp() - delayFrames)/LOGICFRAMES_PER_SECOND));
+	info->setTemplateName(AsciiString::TheEmptyString);
+	info->setNumRebuilds(0);
+	info->setObjectID(INVALID_ID);
+	info->setObjectTimestamp(0);
+	return TRUE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-174) the enemy base the front faces: the current enemy (an Iran team AI takes its leader's
+// enemy, D-126), its first Command Center in the object list, else the centre of its structures. Synced logic only.
+//-------------------------------------------------------------------------------------------------
+Bool AISkirmishPlayer::getIranEnemyBasePosition(Coord3D *pos)
+{
+	Player *enemy = getAiEnemy();
+	if (enemy == nullptr || enemy == m_player)
+		return FALSE;
+	for (Object *obj = TheGameLogic->getFirstObject(); obj; obj = obj->getNextObject())
+	{
+		if (obj->isKindOf(KINDOF_COMMANDCENTER) && !obj->isEffectivelyDead() && obj->getControllingPlayer() == enemy) {
+			*pos = *obj->getPosition();
+			return TRUE;
+		}
+	}
+	Region2D bounds;
+	getPlayerStructureBounds(&bounds, enemy->getPlayerIndex(), TRUE);
+	if (bounds.lo.x == 0.0f && bounds.lo.y == 0.0f && bounds.hi.x == 0.0f && bounds.hi.y == 0.0f)
+		return FALSE;
+	pos->x = bounds.lo.x + bounds.width()/2;
+	pos->y = bounds.lo.y + bounds.height()/2;
+	pos->z = 0.0f;
+	return TRUE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-225) (owner, community maps: "Iran is blocking its own units": the front rows filled the only
+// bridge or pass, the army stayed home and only drones and missiles attacked). The army's road: a ground path
+// IRAN_ROAD_DIAMETER cells wide from an own ground unit in the base (a dozer first) to the enemy base, as the
+// pathfinder finds it now (round standing structures, over bridges). The placements below keep new defenses and
+// buildings off it (isOnIranRoad), so the road stays open; a new structure only bends the next road. No unit in the
+// base or no path: no road, placement as before. Synced logic only.
+//-------------------------------------------------------------------------------------------------
+void AISkirmishPlayer::findIranRoad(const Coord3D *enemyPos)
+{
+	static const Int IRAN_ROAD_DIAMETER = 4;		// cells: a tank column
+	static const Real GOAL_STEP = 150.0f;			// a goal inside a large structure moves toward this base
+	m_iranRoadCount = 0;
+	const Real ringDistance = m_baseRadius + TheAI->getAiData()->m_skirmishBaseDefenseExtraDistance;
+
+	// the path starts on a free cell: the spot of an own ground unit near the base centre
+	const Object *start = nullptr;
+	for (Object *obj = TheGameLogic->getFirstObject(); obj; obj = obj->getNextObject())
+	{
+		if (obj->getControllingPlayer() != m_player || obj->isEffectivelyDead() || obj->isKindOf(KINDOF_STRUCTURE)
+			|| obj->isKindOf(KINDOF_AIRCRAFT) || obj->isAirborneTarget() || obj->getContainedBy() != nullptr
+			|| !(obj->isKindOf(KINDOF_VEHICLE) || obj->isKindOf(KINDOF_INFANTRY)))
+			continue;
+		const Coord3D *at = obj->getPosition();
+		if (sqr(at->x-m_baseCenter.x) + sqr(at->y-m_baseCenter.y) > sqr(ringDistance))
+			continue;
+		if (start == nullptr || obj->isKindOf(KINDOF_DOZER))
+			start = obj;
+		if (start->isKindOf(KINDOF_DOZER))
+			break;
+	}
+	Coord2D back;
+	back.x = m_baseCenter.x - enemyPos->x;
+	back.y = m_baseCenter.y - enemyPos->y;
+	const Real enemyDistance = back.length();
+	if (enemyDistance < 1.0f)
+		return;
+	back.x /= enemyDistance;
+	back.y /= enemyDistance;
+
+	// no unit in the base (the dozer away at an expansion, the army out): start just outside the base edge toward the
+	// enemy instead, stepping out until a path is found (a start inside a structure finds none)
+	Coord2D toEnemy;
+	toEnemy.x = -back.x;
+	toEnemy.y = -back.y;
+	const Real edge = start == nullptr ? getIranBaseFrontEdge(toEnemy) : 0.0f;
+	Path *path = nullptr;
+	Coord3D from;
+	for (Int out = 0; out < (start == nullptr ? 3 : 1) && path == nullptr; ++out)
+	{
+		if (start != nullptr) {
+			from = *start->getPosition();
+		} else {
+			from = m_baseCenter;
+			from.x += toEnemy.x*(edge + 40.0f + out*GOAL_STEP*0.5f);
+			from.y += toEnemy.y*(edge + 40.0f + out*GOAL_STEP*0.5f);
+			from.z = TheTerrainLogic->getGroundHeight(from.x, from.y);
+		}
+		for (Int step = 0; step < 4 && path == nullptr && step*GOAL_STEP < enemyDistance*0.5f; ++step)
+		{
+			Coord3D goal = *enemyPos;
+			goal.x += back.x*GOAL_STEP*step;
+			goal.y += back.y*GOAL_STEP*step;
+			goal.z = TheTerrainLogic->getGroundHeight(goal.x, goal.y);
+			path = TheAI->pathfinder()->findGroundPath(&from, &goal, IRAN_ROAD_DIAMETER, FALSE);
+		}
+	}
+	if (path == nullptr) {
+		if (TheHypersonicScenario != nullptr)
+			TheHypersonicScenario->noteAI("AI ROAD %s: no ground path from %.0f %.0f (%s) to the enemy base at %.0f %.0f, no road",
+				TheHypersonicScenario->sideLabel(m_player), from.x, from.y, start ? "unit" : "base edge", enemyPos->x, enemyPos->y);
+		return;
+	}
+	for (PathNode *node = path->getFirstNode(); node && m_iranRoadCount < IRAN_ROAD_MAX_POINTS; node = node->getNextOptimized())
+	{
+		m_iranRoadX[m_iranRoadCount] = node->getPosition()->x;
+		m_iranRoadY[m_iranRoadCount] = node->getPosition()->y;
+		++m_iranRoadCount;
+	}
+	deleteInstance(path);
+	if (TheHypersonicScenario != nullptr && m_iranRoadCount > 0)
+		TheHypersonicScenario->noteAI("AI ROAD %s: %d points from %.0f %.0f to %.0f %.0f", TheHypersonicScenario->sideLabel(m_player),
+			m_iranRoadCount, m_iranRoadX[0], m_iranRoadY[0], m_iranRoadX[m_iranRoadCount-1], m_iranRoadY[m_iranRoadCount-1]);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-225) the order's road, looked for once, when its first placement loop starts (the early
+// returns of the repeating orders need no pathfind)
+//-------------------------------------------------------------------------------------------------
+void AISkirmishPlayer::prepareIranRoad()
+{
+	if (m_iranRoadCount < 0)
+		findIranRoad(&m_iranRoadEnemy);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-225) TRUE when a structure of this radius at pos would come within IRAN_ROAD_CLEARANCE of
+// the road (about two tank widths stay free on each side)
+//-------------------------------------------------------------------------------------------------
+Bool AISkirmishPlayer::isOnIranRoad(const Coord3D *pos, Real structureRadius) const
+{
+	static const Real IRAN_ROAD_CLEARANCE = 60.0f;
+	const Real reachSqr = sqr(structureRadius + IRAN_ROAD_CLEARANCE);
+	for (Int i = 0; i < m_iranRoadCount; ++i)
+	{
+		const Real ax = m_iranRoadX[i];
+		const Real ay = m_iranRoadY[i];
+		const Real bx = i + 1 < m_iranRoadCount ? m_iranRoadX[i+1] : ax;
+		const Real by = i + 1 < m_iranRoadCount ? m_iranRoadY[i+1] : ay;
+		const Real dx = bx - ax;
+		const Real dy = by - ay;
+		const Real lengthSqr = dx*dx + dy*dy;
+		Real t = lengthSqr > 0.0f ? ((pos->x-ax)*dx + (pos->y-ay)*dy)/lengthSqr : 0.0f;
+		if (t < 0.0f)
+			t = 0.0f;
+		else if (t > 1.0f)
+			t = 1.0f;
+		if (sqr(ax + t*dx - pos->x) + sqr(ay + t*dy - pos->y) < reachSqr)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-174) the base edge toward the enemy: the farthest reach along dir of the own buildings (not
+// defenses) and of the build list's sites (planned buildings count from the start) within 45 degrees of dir and
+// inside the defense ring (far expansions do not count)
+//-------------------------------------------------------------------------------------------------
+Real AISkirmishPlayer::getIranBaseFrontEdge(const Coord2D &dir)
+{
+	static const Real SECTOR_COS = 0.7071f;			// cos 45 degrees
+	const Real ringDistance = m_baseRadius + TheAI->getAiData()->m_skirmishBaseDefenseExtraDistance;
+	Real edge = 0.0f;
+	for (Object *obj = TheGameLogic->getFirstObject(); obj; obj = obj->getNextObject())
+	{
+		if (obj->getControllingPlayer() != m_player || !obj->isKindOf(KINDOF_STRUCTURE) || obj->isKindOf(KINDOF_FS_BASE_DEFENSE)
+			|| obj->isEffectivelyDead())
+			continue;
+		const Real rx = obj->getPosition()->x - m_baseCenter.x;
+		const Real ry = obj->getPosition()->y - m_baseCenter.y;
+		const Real along = rx*dir.x + ry*dir.y;
+		const Real dist = sqrt(rx*rx + ry*ry);
+		if (along <= 0.0f || dist > ringDistance || along < dist*SECTOR_COS)
+			continue;
+		const Real reach = along + obj->getGeometryInfo().getBoundingCircleRadius();
+		if (reach > edge)
+			edge = reach;
+	}
+	for (BuildListInfo *info = m_player->getBuildList(); info; info = info->getNext())
+	{
+		if (info->getTemplateName().isEmpty())
+			continue;
+		const ThingTemplate *plan = TheThingFactory->findTemplate(info->getTemplateName());
+		if (plan == nullptr || plan->isKindOf(KINDOF_FS_BASE_DEFENSE))
+			continue;
+		const Real rx = info->getLocation()->x - m_baseCenter.x;
+		const Real ry = info->getLocation()->y - m_baseCenter.y;
+		const Real along = rx*dir.x + ry*dir.y;
+		const Real dist = sqrt(rx*rx + ry*ry);
+		if (along <= 0.0f || dist > ringDistance || along < dist*SECTOR_COS)
+			continue;
+		const Real reach = along + plan->getTemplateGeometryInfo().getBoundingCircleRadius();
+		if (reach > edge)
+			edge = reach;
+	}
+	return edge;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-174) (owner: "in the middle, which matters the most, they don't [have defenses], or have
+// one"; "the enemy stacks up their defenses, our side has like a War Factory at the front"). The ring above put front
+// defenses at m_baseRadius + extra from the build-list centre: on Tournament Desert that is down in the central
+// valley, where the enemy's guard teams stand (the dozer never finds it safe, those spots were never built, or were
+// lost at once), and then every later front order was blocked by the lost one's pending rebuild.
+// A front defense now goes on the line toward the enemy base just outside the base edge: the farthest own building
+// (not a defense) within 45 degrees of that line, plus clearance. Each row is scanned from the line outwards up to
+// +-30 degrees; when a row is blocked (base buildings, cliffs) the next row further out along the approach, never
+// past half way to the enemy; when all are full, the same rows out to +-50 degrees. Spots of pending orders are kept free, so the orders fill in side by side.
+// A lost front defense (a D-174 rebuild entry within 45 degrees of the line) is not a reason to skip the order: its
+// entry is moved to the spot chosen now (often its own spot again), so losses neither block the front nor pile up
+// extra entries. Returns false when no spot was found (the caller falls back to the ring).
+//-------------------------------------------------------------------------------------------------
+Bool AISkirmishPlayer::buildIranFrontDefense(const ThingTemplate *tTemplate, const AsciiString &thingName, const Coord2D &dir,
+	Real enemyDistance)
+{
+	static const Int FRONT_ROWS = 8;
+	static const Real FRONT_HALF_ARC = PI/6;		// +-30 degrees from the line between the bases
+	static const Real WIDE_HALF_ARC = PI*5/18;		// then +-50 degrees when the narrow front is full
+	static const Real SECTOR_COS = 0.7071f;			// cos 45 degrees: a lost defense that counts as "in front"
+	const Real structureRadius = tTemplate->getTemplateGeometryInfo().getBoundingCircleRadius();
+	const Real spacing = structureRadius*3 > 90.0f ? structureRadius*3 : 90.0f;
+	const Real rowStep = structureRadius*2.5f > 70.0f ? structureRadius*2.5f : 70.0f;
+	const Real holdRadius = structureRadius*2 > structureRadius + 40.0f ? structureRadius*2 : structureRadius + 40.0f;
+	const Real placeAngle = tTemplate->getPlacementViewAngle();
+
+	// the base edge on the approach
+	const Real edge = getIranBaseFrontEdge(dir);
+	Real start = edge + structureRadius + 40.0f;
+	if (start < structureRadius*4)
+		start = structureRadius*4;
+
+	// a lost front defense of this type: its entry is moved, not doubled
+	BuildListInfo *reuse = nullptr;
+	for (BuildListInfo *info = m_player->getBuildList(); info; info = info->getNext())
+	{
+		if (!isIranDefenseRebuild(info) || info->getTemplateName() != thingName
+			|| (info->getObjectID() != INVALID_ID && TheGameLogic->findObjectByID(info->getObjectID()) != nullptr))
+			continue;
+		const Real rx = info->getLocation()->x - m_baseCenter.x;
+		const Real ry = info->getLocation()->y - m_baseCenter.y;
+		const Real dist = sqrt(rx*rx + ry*ry);
+		if (dist > 0.0f && rx*dir.x + ry*dir.y >= dist*SECTOR_COS) {
+			reuse = info;
+			break;
+		}
+	}
+
+	// the script's count sees only standing defenses: while IRAN_FRONT_PENDING_LIMIT front orders of this type were
+	// placed but never built (unsafe spot, dozer busy), a new order is skipped, so unbuilt orders do not pile up
+	if (reuse == nullptr) {
+		static const Int IRAN_FRONT_PENDING_LIMIT = 2;
+		static const Real PENDING_COS = 0.5f;		// cos 60 degrees: the wide arc and the ring fallback's reach
+		Int pending = 0;
+		for (BuildListInfo *info = m_player->getBuildList(); info; info = info->getNext())
+		{
+			// a fresh order still has all its rebuilds; one under construction has its object
+			if (!info->isPriorityBuild() || info->getNumRebuilds() != IRAN_DEFENSE_REBUILDS || info->getTemplateName() != thingName
+				|| (info->getObjectID() != INVALID_ID && TheGameLogic->findObjectByID(info->getObjectID()) != nullptr))
+				continue;
+			const Real rx = info->getLocation()->x - m_baseCenter.x;
+			const Real ry = info->getLocation()->y - m_baseCenter.y;
+			const Real dist = sqrt(rx*rx + ry*ry);
+			if (dist > 0.0f && rx*dir.x + ry*dir.y >= dist*PENDING_COS && !releaseIranStaleRebuild(info))
+				++pending;	// an order not started for long is given up instead
+		}
+		if (pending >= IRAN_FRONT_PENDING_LIMIT) {
+			if (TheHypersonicScenario != nullptr)
+				TheHypersonicScenario->noteAI("AI DEFENSE %s front %s toward %.0f deg: skipped, %d front orders of it not built yet",
+					TheHypersonicScenario->sideLabel(m_player), thingName.str(), atan2(dir.y, dir.x)*180/PI, pending);
+			return TRUE;	// handled: no ring fallback either
+		}
+	}
+
+	prepareIranRoad();	// D-225
+	for (Int pass = 0; pass < 2; ++pass)
+	for (Int row = 0; row < FRONT_ROWS; ++row)
+	{
+		const Real distance = start + row*rowStep;
+		if (row > 0 && distance > enemyDistance*0.5f)
+			break;
+		const Real angleStep = spacing/distance;
+		const Int steps = (Int)((pass == 0 ? FRONT_HALF_ARC : WIDE_HALF_ARC)/angleStep);
+		for (Int k = 0; k <= 2*steps; ++k)
+		{
+			// 0, +1, -1, +2, -2, ... steps from the line
+			const Real angle = angleStep * (Real)((k+1)/2) * ((k&1) ? 1.0f : -1.0f);
+			if (pass == 1 && fabs(angle) <= FRONT_HALF_ARC)
+				continue;	// tried in the first pass
+			const Real s = sin(angle);
+			const Real c = cos(angle);
+			Coord3D buildPos = m_baseCenter;
+			buildPos.x += distance*(dir.x*c - dir.y*s);
+			buildPos.y += distance*(dir.y*c + dir.x*s);
+			// the overlap test below compares heights: at z 0 it misses every object standing on higher ground
+			buildPos.z = TheTerrainLogic->getGroundHeight(buildPos.x, buildPos.y);
+
+			// a spot already ordered but not standing (the overlap test below sees only objects)
+			Bool held = FALSE;
+			for (BuildListInfo *info = m_player->getBuildList(); info; info = info->getNext())
+			{
+				if (info == reuse || !info->isBuildable()
+					|| (info->getObjectID() != INVALID_ID && TheGameLogic->findObjectByID(info->getObjectID()) != nullptr))
+					continue;
+				const Coord3D *at = info->getLocation();
+				if (sqr(at->x-buildPos.x) + sqr(at->y-buildPos.y) < sqr(holdRadius)) {
+					held = TRUE;
+					break;
+				}
+			}
+			if (held || isOnIranRoad(&buildPos, structureRadius))	// D-225: the army's road stays open
+				continue;
+
+			const Bool canBuild = LBC_OK == TheBuildAssistant->isLocationLegalToBuild(&buildPos, tTemplate, placeAngle,
+				BuildAssistant::TERRAIN_RESTRICTIONS|BuildAssistant::NO_OBJECT_OVERLAP, nullptr, m_player);
+			TheTerrainVisual->removeAllBibs();	// isLocationLegalToBuild adds bib feedback, turn it off.  jba.
+			buildPos.z = m_baseCenter.z;	// build orders keep the base centre's z (the dozer adds the ground height)
+			if (!canBuild)
+				continue;
+			Coord3D lostAt;
+			if (reuse) {
+				lostAt = *reuse->getLocation();
+				reuse->setLocation(buildPos);
+				reuse->setAngle(placeAngle);
+				// the give-up time (releaseIranStaleRebuild) counts from the move
+				stampIranOrder(reuse);
+			} else {
+				m_player->addToPriorityBuildList(thingName, &buildPos, placeAngle);
+				// D-174 (owner: "defenses should always be rebuilt when possible"): rebuilt at this spot when lost
+				m_player->getBuildList()->setNumRebuilds(IRAN_DEFENSE_REBUILDS);
+				stampIranOrder(m_player->getBuildList());	// the give-up time counts from here
+			}
+			if (TheHypersonicScenario != nullptr)
+				TheHypersonicScenario->noteAI("AI DEFENSE %s front %s toward %.0f deg (enemy %.0f away): base edge %.0f, %s row %d at %.0f, %+.0f deg -> %.0f %.0f%s (base centre %.0f %.0f, radius %.0f)",
+					TheHypersonicScenario->sideLabel(m_player), thingName.str(), atan2(dir.y, dir.x)*180/PI, enemyDistance, edge,
+					pass == 0 ? "narrow" : "wide", row,
+					distance, angle*180/PI, buildPos.x, buildPos.y, reuse ? " (moves a lost one's rebuild)" : "", m_baseCenter.x,
+					m_baseCenter.y, m_baseRadius);
+			if (reuse && TheHypersonicScenario != nullptr)
+				TheHypersonicScenario->noteAI("AI DEFENSE %s front %s lost one was at %.0f %.0f", TheHypersonicScenario->sideLabel(m_player),
+					thingName.str(), lostAt.x, lostAt.y);
+			return TRUE;
+		}
+	}
+	if (TheHypersonicScenario != nullptr)
+		TheHypersonicScenario->noteAI("AI DEFENSE %s front %s toward %.0f deg: no legal spot (base edge %.0f, start %.0f); ring fallback",
+			TheHypersonicScenario->sideLabel(m_player), thingName.str(), atan2(dir.y, dir.x)*180/PI, edge, start);
+	return FALSE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-174) the near side of the front defense line: the smallest reach toward the enemy (along
+// enemyDir, minus the defense's radius) of the own base defenses, standing or still ordered, within 45 degrees of
+// enemyDir, beyond the base edge (the in-base Dehlavieh sites are not the front) and not past half way to the enemy.
+// count = how many there are (0: no front line yet, returns 0).
+//-------------------------------------------------------------------------------------------------
+Real AISkirmishPlayer::getIranFrontDefenseLine(const Coord2D &enemyDir, Real enemyDistance, Int *count)
+{
+	static const Real SECTOR_COS = 0.7071f;			// cos 45 degrees
+	const Real edge = getIranBaseFrontEdge(enemyDir);
+	Real line = 0.0f;
+	Int found = 0;
+	for (Object *def = TheGameLogic->getFirstObject(); def; def = def->getNextObject())
+	{
+		if (def->getControllingPlayer() != m_player || !def->isKindOf(KINDOF_FS_BASE_DEFENSE) || !def->isKindOf(KINDOF_STRUCTURE)
+			|| def->isEffectivelyDead())
+			continue;
+		const Real rx = def->getPosition()->x - m_baseCenter.x;
+		const Real ry = def->getPosition()->y - m_baseCenter.y;
+		const Real along = rx*enemyDir.x + ry*enemyDir.y;
+		const Real dist = sqrt(rx*rx + ry*ry);
+		if (along <= edge || along < dist*SECTOR_COS || dist > enemyDistance*0.5f)
+			continue;
+		const Real reach = along - def->getGeometryInfo().getBoundingCircleRadius();
+		if (found == 0 || reach < line)
+			line = reach;
+		++found;
+	}
+	for (BuildListInfo *plan = m_player->getBuildList(); plan; plan = plan->getNext())
+	{
+		if (plan->getTemplateName().isEmpty() || !plan->isBuildable()
+			|| (plan->getObjectID() != INVALID_ID && TheGameLogic->findObjectByID(plan->getObjectID()) != nullptr))
+			continue;	// a standing one was counted above
+		const ThingTemplate *planTemplate = TheThingFactory->findTemplate(plan->getTemplateName());
+		if (planTemplate == nullptr || !planTemplate->isKindOf(KINDOF_FS_BASE_DEFENSE))
+			continue;
+		const Real rx = plan->getLocation()->x - m_baseCenter.x;
+		const Real ry = plan->getLocation()->y - m_baseCenter.y;
+		const Real along = rx*enemyDir.x + ry*enemyDir.y;
+		const Real dist = sqrt(rx*rx + ry*ry);
+		if (along <= edge || along < dist*SECTOR_COS || dist > enemyDistance*0.5f)
+			continue;
+		const Real reach = along - planTemplate->getTemplateGeometryInfo().getBoundingCircleRadius();
+		if (found == 0 || reach < line)
+			line = reach;
+		++found;
+	}
+	*count = found;
+	return line;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-174) (owner: the extra War Factory stood out in front of the bunkers). A building ordered
+// through the flank/front scripts (not a base defense) goes behind the front: its far side at least
+// IRAN_BEHIND_CLEARANCE short of the front defense line (getIranFrontDefenseLine; with no front defenses yet, the base
+// edge toward the enemy), and never inside the 45 degree cone toward the enemy, so the bunker rows and the way out to
+// them stay free. Spots are scanned from the base centre outwards, ring by ring, each ring from the order's direction
+// (flank/backdoor path) round both ways; the first pass takes only spots level with the base centre (the base
+// plateau), the second any height. A spot must keep clear of every structure and of every pending order (bounding
+// circles do not touch, which leaves lanes between buildings) and pass the stock legality test. Synced logic only.
+// Returns false when nothing was found (the caller falls back to the ring and logs it).
+//-------------------------------------------------------------------------------------------------
+Bool AISkirmishPlayer::buildIranBuildingBehindFront(const ThingTemplate *tTemplate, const AsciiString &thingName,
+	const Coord2D &dir, const Coord2D &enemyDir, Real enemyDistance, const char *orderLabel)
+{
+	static const Real SECTOR_COS = 0.7071f;			// cos 45 degrees: the front cone
+	static const Real IRAN_BEHIND_CLEARANCE = 40.0f;	// the building's far side stays this far behind the line
+	static const Real LEVEL_HEIGHT = 12.0f;			// first pass: ground within this of the base centre's ground
+	enum { MAX_KEEP_CLEAR = 512 };
+	const Real structureRadius = tTemplate->getTemplateGeometryInfo().getBoundingCircleRadius();
+	const Real placeAngle = tTemplate->getPlacementViewAngle();
+	if (structureRadius <= 0.0f)
+		return FALSE;
+	const Real ringDistance = m_baseRadius + TheAI->getAiData()->m_skirmishBaseDefenseExtraDistance;
+	const Real maxDistance = ringDistance + 2*structureRadius*3;	// the stock ring's outer row
+	const Real radialStep = structureRadius*0.5f > 25.0f ? structureRadius*0.5f : 25.0f;
+	const Real arcStep = structureRadius*0.75f > 25.0f ? structureRadius*0.75f : 25.0f;
+
+	// how far toward the enemy the building may reach
+	Int frontDefenses = 0;
+	const Real frontLine = getIranFrontDefenseLine(enemyDir, enemyDistance, &frontDefenses);
+	Real limit;
+	if (frontDefenses > 0) {
+		limit = frontLine - IRAN_BEHIND_CLEARANCE;
+	} else {
+		limit = getIranBaseFrontEdge(enemyDir);	// no front line yet: do not push the base edge (the rows start there)
+	}
+
+	// circles to keep clear of: pending orders not standing yet (first, so a crowded area never leaves them out; the
+	// legality test below sees standing structures anyway) and structures near the base
+	Real keepX[MAX_KEEP_CLEAR];
+	Real keepY[MAX_KEEP_CLEAR];
+	Real keepR[MAX_KEEP_CLEAR];
+	Int keepCount = 0;
+	const Real nearby = maxDistance + structureRadius + 300.0f;
+	for (BuildListInfo *pending = m_player->getBuildList(); pending && keepCount < MAX_KEEP_CLEAR; pending = pending->getNext())
+	{
+		if (pending->getTemplateName().isEmpty() || !pending->isBuildable()
+			|| (pending->getObjectID() != INVALID_ID && TheGameLogic->findObjectByID(pending->getObjectID()) != nullptr))
+			continue;
+		if (sqr(pending->getLocation()->x-m_baseCenter.x) + sqr(pending->getLocation()->y-m_baseCenter.y) > sqr(nearby))
+			continue;
+		const ThingTemplate *pendingTemplate = TheThingFactory->findTemplate(pending->getTemplateName());
+		keepX[keepCount] = pending->getLocation()->x;
+		keepY[keepCount] = pending->getLocation()->y;
+		keepR[keepCount] = pendingTemplate ? pendingTemplate->getTemplateGeometryInfo().getBoundingCircleRadius() : structureRadius;
+		++keepCount;
+	}
+	for (Object *other = TheGameLogic->getFirstObject(); other && keepCount < MAX_KEEP_CLEAR; other = other->getNextObject())
+	{
+		if (!other->isKindOf(KINDOF_STRUCTURE) || other->isEffectivelyDead())
+			continue;
+		const Coord3D *at = other->getPosition();
+		if (sqr(at->x-m_baseCenter.x) + sqr(at->y-m_baseCenter.y) > sqr(nearby))
+			continue;
+		keepX[keepCount] = at->x;
+		keepY[keepCount] = at->y;
+		keepR[keepCount] = other->getGeometryInfo().getBoundingCircleRadius();
+		++keepCount;
+	}
+
+	prepareIranRoad();	// D-225
+	const Real baseHeight = TheTerrainLogic->getGroundHeight(m_baseCenter.x, m_baseCenter.y);
+	for (Int pass = 0; pass < 2; ++pass)
+	for (Real distance = structureRadius; distance <= maxDistance; distance += radialStep)
+	{
+		const Real angleStep = arcStep/distance;
+		const Int steps = (Int)(PI/angleStep);
+		for (Int k = 0; k <= 2*steps; ++k)
+		{
+			// 0, +1, -1, +2, -2, ... steps from the order's direction
+			const Real angle = angleStep * (Real)((k+1)/2) * ((k&1) ? 1.0f : -1.0f);
+			const Real s = sin(angle);
+			const Real c = cos(angle);
+			const Real ox = distance*(dir.x*c - dir.y*s);
+			const Real oy = distance*(dir.y*c + dir.x*s);
+			const Real along = ox*enemyDir.x + oy*enemyDir.y;
+			if (along > distance*SECTOR_COS || along + structureRadius > limit)
+				continue;	// in the front cone, or reaching toward the bunker rows
+			Coord3D buildPos = m_baseCenter;
+			buildPos.x += ox;
+			buildPos.y += oy;
+
+			Bool blocked = FALSE;
+			for (Int i = 0; i < keepCount; ++i)
+			{
+				if (sqr(keepX[i]-buildPos.x) + sqr(keepY[i]-buildPos.y) < sqr(keepR[i] + structureRadius)) {
+					blocked = TRUE;
+					break;
+				}
+			}
+			if (blocked || isOnIranRoad(&buildPos, structureRadius))	// D-225: the army's road stays open
+				continue;
+
+			// the overlap test compares heights: at the base centre's z (0) it missed every object on higher ground
+			buildPos.z = TheTerrainLogic->getGroundHeight(buildPos.x, buildPos.y);
+			if (pass == 0 && fabs(buildPos.z - baseHeight) > LEVEL_HEIGHT)
+				continue;
+			const Bool canBuild = LBC_OK == TheBuildAssistant->isLocationLegalToBuild(&buildPos, tTemplate, placeAngle,
+				BuildAssistant::TERRAIN_RESTRICTIONS|BuildAssistant::NO_OBJECT_OVERLAP, nullptr, m_player);
+			TheTerrainVisual->removeAllBibs();	// isLocationLegalToBuild adds bib feedback, turn it off.  jba.
+			if (!canBuild)
+				continue;
+			const Real groundZ = buildPos.z;
+			buildPos.z = m_baseCenter.z;	// build orders keep the base centre's z (the dozer adds the ground height)
+			m_player->addToPriorityBuildList(thingName, &buildPos, placeAngle);
+			// D-174 (owner: "defenses should always be rebuilt when possible"): rebuilt at this spot when lost
+			m_player->getBuildList()->setNumRebuilds(IRAN_DEFENSE_REBUILDS);
+			if (TheHypersonicScenario != nullptr)
+				TheHypersonicScenario->noteAI("AI DEFENSE %s %s %s behind the front: %s pass, r %.0f, %+.0f deg from the order -> %.0f %.0f (ground %.0f, base %.0f); toward enemy %.0f, far side %.0f, %s %.0f, %.0f behind it (base centre %.0f %.0f)",
+					TheHypersonicScenario->sideLabel(m_player), orderLabel, thingName.str(), pass == 0 ? "level" : "any height",
+					distance, angle*180/PI, buildPos.x, buildPos.y, groundZ, baseHeight, along, along + structureRadius,
+					frontDefenses > 0 ? "front defense line" : "base edge (no front defenses)",
+					frontDefenses > 0 ? frontLine : limit,
+					(frontDefenses > 0 ? frontLine : limit) - (along + structureRadius), m_baseCenter.x, m_baseCenter.y);
+			return TRUE;
+		}
+	}
+	if (TheHypersonicScenario != nullptr)
+		TheHypersonicScenario->noteAI("AI DEFENSE %s %s %s behind the front: NO SPOT (%s %.0f, limit %.0f, %d circles); ring fallback",
+			TheHypersonicScenario->sideLabel(m_player), orderLabel, thingName.str(),
+			frontDefenses > 0 ? "front defense line" : "base edge", frontDefenses > 0 ? frontLine : limit, limit, keepCount);
+	return FALSE;
+}
+
+void AISkirmishPlayer::buildIranBaseDefenseStructure(const ThingTemplate *tTemplate, const AsciiString &thingName, Bool flank)
+{
+	static const Int IRAN_DEFENSE_ROWS = 3;
+
+	// Hypersonic @bugfix (D-174) the direction of the enemy base (front defenses; buildings keep out of it)
+	const Bool isDefense = tTemplate->isKindOf(KINDOF_FS_BASE_DEFENSE);
+	Coord3D enemyPos;
+	Coord2D enemyDir;
+	enemyDir.x = enemyDir.y = 0.0f;
+	Real enemyDistance = 0.0f;
+	if (getIranEnemyBasePosition(&enemyPos)) {
+		enemyDir.x = enemyPos.x - m_baseCenter.x;
+		enemyDir.y = enemyPos.y - m_baseCenter.y;
+		enemyDistance = enemyDir.length();
+		if (enemyDistance > 1.0f) {
+			enemyDir.x /= enemyDistance;
+			enemyDir.y /= enemyDistance;
+		} else {
+			enemyDir.x = enemyDir.y = 0.0f;
+		}
+	}
+	const Bool haveEnemyDir = enemyDir.x != 0.0f || enemyDir.y != 0.0f;
+	// D-225: every spot below keeps off the army's road, looked for only when a placement loop starts (prepareIranRoad)
+	m_iranRoadCount = haveEnemyDir ? -1 : 0;
+	if (haveEnemyDir)
+		m_iranRoadEnemy = enemyPos;
+	if (!flank && isDefense && haveEnemyDir && buildIranFrontDefense(tTemplate, thingName, enemyDir, enemyDistance))
+		return;
+
+	AsciiString pathLabel;
+	if (flank) {
+		// stock order: backdoor, flank, backdoor, ...
+		pathLabel.format("%s%d", (m_curFlankBaseDefense&1) ? SKIRMISH_FLANK : SKIRMISH_BACKDOOR, m_player->getMpStartIndex()+1);
+		m_curFlankBaseDefense++;
+	}	else {
+		pathLabel.format("%s%d", SKIRMISH_CENTER, m_player->getMpStartIndex()+1);
+	}
+
+	Coord3D goalPos = m_baseCenter;
+	Bool aimed = FALSE;
+	if (!flank && haveEnemyDir) {
+		// the front faces the enemy's base: the centre path's nearest waypoint can lie off to one side of the base
+		goalPos.x = enemyPos.x;
+		goalPos.y = enemyPos.y;
+		aimed = TRUE;
+	}
+	if (!aimed) {
+		Waypoint *way = TheTerrainLogic->getClosestWaypointOnPath( &goalPos, pathLabel );
+		if (!way)
+			return;
+		goalPos = *way->getLocation();
+	}
+	Coord2D dir;
+	dir.x = goalPos.x-m_baseCenter.x;
+	dir.y = goalPos.y-m_baseCenter.y;
+	if (dir.x == 0.0f && dir.y == 0.0f)
+		return;
+	dir.normalize();
+
+	// flank orders (and the front fallback): a lost defense of this type on this side (within 60 degrees of the
+	// order's direction) waits for its rebuild (processBaseBuilding): that covers this order, so the repeating script
+	// orders do not add one more spot for every defense lost. A lost one on another side does not block, and one not
+	// rebuilt for a long time is given up (releaseIranStaleRebuild) and no longer blocks either. A building (its spot
+	// behind the front is not tied to the order's side) still waits for a lost one of its type anywhere.
+	{
+		static const Real SIDE_COS = 0.5f;		// cos 60 degrees
+		for (BuildListInfo *info = m_player->getBuildList(); info; info = info->getNext())
+		{
+			// the entry keeps a dead object's ID until processBaseBuilding's next pass
+			if (!isIranDefenseRebuild(info) || info->getTemplateName() != thingName
+				|| (info->getObjectID() != INVALID_ID && TheGameLogic->findObjectByID(info->getObjectID()) != nullptr))
+				continue;
+			const Real rx = info->getLocation()->x - m_baseCenter.x;
+			const Real ry = info->getLocation()->y - m_baseCenter.y;
+			const Real dist = sqrt(rx*rx + ry*ry);
+			if (isDefense && dist > 0.0f && rx*dir.x + ry*dir.y < dist*SIDE_COS)
+				continue;	// another side
+			if (releaseIranStaleRebuild(info))
+				continue;
+			if (TheHypersonicScenario != nullptr)
+				TheHypersonicScenario->noteAI("AI DEFENSE %s %s %s %s: waits for the lost one's rebuild at %.0f %.0f",
+					TheHypersonicScenario->sideLabel(m_player), flank ? "flank" : "front", thingName.str(),
+					aimed ? "toward enemy" : pathLabel.str(), info->getLocation()->x, info->getLocation()->y);
+			return;
+		}
+	}
+
+	// Hypersonic @bugfix (D-174) a building (War Factory, power plant, ...) goes behind the front defense line, out of
+	// the front cone; the ring below only when no such spot exists anywhere in the base
+	if (!isDefense && haveEnemyDir) {
+		AsciiString orderLabel;
+		orderLabel.format("%s %s", flank ? "flank" : "front", aimed ? "toward enemy" : pathLabel.str());
+		if (buildIranBuildingBehindFront(tTemplate, thingName, dir, enemyDir, enemyDistance, orderLabel.str()))
+			return;
+	}
+
+	const Real structureRadius = tTemplate->getTemplateGeometryInfo().getBoundingCircleRadius();
+	const Real spacing = structureRadius*4;		// stock spacing along the ring
+	const Real placeAngle = tTemplate->getPlacementViewAngle();
+	{
+		prepareIranRoad();	// D-225
+		for (Int row = 0; row < IRAN_DEFENSE_ROWS; ++row)
+		{
+			const Real distance = m_baseRadius + TheAI->getAiData()->m_skirmishBaseDefenseExtraDistance + row*structureRadius*3;
+			if (distance <= 0.0f || spacing <= 0.0f)
+				return;
+			const Real angleStep = spacing/distance;
+			const Int steps = (Int)((PI/3)/angleStep);
+			for (Int k = 0; k <= 2*steps; ++k)
+			{
+				// 0, +1, -1, +2, -2, ... steps from the attack path
+				const Real angle = angleStep * (Real)((k+1)/2) * ((k&1) ? 1.0f : -1.0f);
+				const Real s = sin(angle);
+				const Real c = cos(angle);
+				const Real ox = distance*(dir.x*c - dir.y*s);
+				const Real oy = distance*(dir.y*c + dir.x*s);
+				Coord3D buildPos = m_baseCenter;
+				buildPos.x += ox;
+				buildPos.y += oy;
+				// Hypersonic @bugfix (D-174) the overlap test compares heights: at the base centre's z (0) it missed every
+				// object standing on higher ground
+				buildPos.z = TheTerrainLogic->getGroundHeight(buildPos.x, buildPos.y);
+
+				// a spot already ordered but not started yet (the overlap test below sees only objects)
+				Bool held = FALSE;
+				for (BuildListInfo *info = m_player->getBuildList(); info; info = info->getNext())
+				{
+					if (!info->isBuildable() || (info->getObjectID() != INVALID_ID && TheGameLogic->findObjectByID(info->getObjectID()) != nullptr))
+						continue;
+					const Coord3D *at = info->getLocation();
+					if (sqr(at->x-buildPos.x) + sqr(at->y-buildPos.y) < sqr(2*structureRadius)) {
+						held = TRUE;
+						break;
+					}
+				}
+				if (held || isOnIranRoad(&buildPos, structureRadius))	// D-225: the army's road stays open
+					continue;
+
+				const Bool canBuild = LBC_OK == TheBuildAssistant->isLocationLegalToBuild(&buildPos, tTemplate, placeAngle,
+					BuildAssistant::TERRAIN_RESTRICTIONS|BuildAssistant::NO_OBJECT_OVERLAP, nullptr, m_player);
+				TheTerrainVisual->removeAllBibs();	// isLocationLegalToBuild adds bib feedback, turn it off.  jba.
+				buildPos.z = m_baseCenter.z;	// build orders keep the base centre's z (the dozer adds the ground height)
+				if (canBuild) {
+					m_player->addToPriorityBuildList(thingName, &buildPos, placeAngle);
+					// D-174 (owner: "defenses should always be rebuilt when possible"): rebuilt at this spot when lost
+					m_player->getBuildList()->setNumRebuilds(IRAN_DEFENSE_REBUILDS);
+					if (isDefense)
+						stampIranOrder(m_player->getBuildList());	// the give-up time counts from here
+					if (TheHypersonicScenario != nullptr)
+						TheHypersonicScenario->noteAI("AI DEFENSE %s %s %s ring %s %.0f deg, row %d at %.0f, %+.0f deg%s -> %.0f %.0f",
+							TheHypersonicScenario->sideLabel(m_player), flank ? "flank" : "front", thingName.str(),
+							aimed ? "toward enemy" : pathLabel.str(), atan2(dir.y, dir.x)*180/PI, row, distance, angle*180/PI,
+							(!isDefense && haveEnemyDir) ? " (building: FALLBACK, nothing behind the front)" : "", buildPos.x, buildPos.y);
+					return;
+				}
+			}
+		}
+	}
+	if (TheHypersonicScenario != nullptr)
+		TheHypersonicScenario->noteAI("AI DEFENSE %s %s %s ring %s: no legal spot", TheHypersonicScenario->sideLabel(m_player),
+			flank ? "flank" : "front", thingName.str(), aimed ? "toward enemy" : pathLabel.str());
 }
 
 
@@ -1129,7 +2073,7 @@ Object * AISkirmishPlayer::findDozer( const Coord3D *pos )
 /**
  * Find a good spot to fire a superweapon.
  */
-Bool AISkirmishPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *retPos, Int playerNdx, Real weaponRadius)
+Bool AISkirmishPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *retPos, Int playerNdx, Real weaponRadius, const Coord3D *minRangeFrom, Real minRange)
 {
 
 	Region2D bounds;
@@ -1171,7 +2115,8 @@ Bool AISkirmishPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *powe
 		return TRUE;
 	}
 
-	return AIPlayer::computeSuperweaponTarget(power, retPos, playerNdx, weaponRadius);
+	// Hypersonic @feature (D-172) the cluster-mine branch above is unchanged (no MinimumRange power uses it)
+	return AIPlayer::computeSuperweaponTarget(power, retPos, playerNdx, weaponRadius, minRangeFrom, minRange);
 
 }
 

@@ -472,7 +472,8 @@ void RecorderClass::updateRecord()
 		if (msg->getType() == GameMessage::MSG_NEW_GAME &&
 			 msg->getArgument(0)->integer != GAME_SHELL &&
 			 msg->getArgument(0)->integer != GAME_SINGLE_PLAYER && // Due to the massive amount of scripts that use <local player> in GC and single player, replays have been cut for them.
-			 msg->getArgument(0)->integer != GAME_NONE)
+			 msg->getArgument(0)->integer != GAME_NONE &&
+			 TheGlobalData->m_hypersonicScenario.isEmpty()) // Hypersonic @feature (D-048): a dev test scenario (D-049) keeps the last replay
 		{
 			m_originalGameMode = msg->getArgument(0)->integer;
 			DEBUG_LOG(("RecorderClass::updateRecord() - original game is mode %d", m_originalGameMode));

@@ -5250,6 +5250,15 @@ StateReturnType AIAttackFireWeaponState::update()
 		return STATE_FAILURE;
 	}
 
+	// Hypersonic @feature SAM early launch (Generals Hypersonic D-038): the intercept point against an Iranian missile
+	// can leave the weapon's reach (or vanish) between aiming and firing, e.g. during a pre-attack delay. Then do not
+	// fire; go back to aiming, whose range conditions decide what happens next.
+	if (m_att->isAttackingObject() && victim != nullptr && !weapon->hasLeechRange()
+			&& weapon->getTemplate()->isLeadInterceptEngagement(victim) && !weapon->isWithinAttackRange(obj, victim))
+	{
+		return STATE_FAILURE;
+	}
+
 	// must adjust the state BEFORE calling fireWeapon, for FX to work correctly...
 	obj->setFiringConditionForCurrentWeapon();
 

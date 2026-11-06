@@ -178,6 +178,8 @@ W3DView::W3DView()
 	//Enhancements from CNC3 WST 4/15/2003. JSC Integrated 5/20/03.
 	m_scriptedState = 0;
 	m_CameraArrivedAtWaypointOnPathFlag = false;	// Scripts for polling camera reached targets
+	m_freeCamera = false;							// Hypersonic @feature scenario free camera (D-272)
+	m_freeCameraLens = false;
 	m_isCameraSlaved = false;						// This is for 3DSMax camera playback
 	m_useRealZoomCam = false;						// true;	//WST 10/18/2002
 	m_shakerAngles.X =0.0f;							// Proper camera shake generator & sources
@@ -379,7 +381,10 @@ void W3DView::buildCameraTransform( Matrix3D *transform, const Vector3 &sourcePo
 
 	// build new camera transform
 	transform->Make_Identity();
-	transform->Look_At( sourcePos, targetPos, 0 );
+	if (m_freeCamera)	// Hypersonic @feature scenario free camera (D-272): can look up, unlike the pitch
+		transform->Look_At( m_freeCameraEye, m_freeCameraTarget, 0 );
+	else
+		transform->Look_At( sourcePos, targetPos, 0 );
 
 	//WST 11/12/2002 New camera shaker system
 	// TheSuperHackers @tweak The camera shaker is now decoupled from the render update.
@@ -765,7 +770,7 @@ void W3DView::updateCameraClipPlanes(const Matrix3D &transform)
 {
 	Real farZ;
 
-	if (TheGlobalData->m_drawEntireTerrain)
+	if (TheGlobalData->m_drawEntireTerrain || m_freeCamera)	// Hypersonic @feature (D-272): looking up, the terrain gives no far plane
 	{
 		farZ = 100000.0f;
 	}
@@ -919,6 +924,7 @@ void W3DView::set3DCameraLookAt(const Coord3D &pos, const Coord3D &dir, Real rol
 //-------------------------------------------------------------------------------------------------
 void W3DView::reset()
 {
+	setFreeCamera( nullptr, nullptr, 0.0f );	// Hypersonic @feature (D-272)
 	View::reset();
 
 	// Just in case...
@@ -1691,7 +1697,8 @@ void W3DView::update()
 
 	// render all of the visible Drawables
 	/// @todo this needs to use a real region partition or something
-	TheGameClient->iterateDrawablesInRegion( &axisAlignedRegion, drawDrawable, nullptr );
+	// Hypersonic @feature (D-272): the view region is where the screen meets the ground, none when looking up
+	TheGameClient->iterateDrawablesInRegion( m_freeCamera ? nullptr : &axisAlignedRegion, drawDrawable, nullptr );
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2077,7 +2084,7 @@ void W3DView::draw()
 	TheGameClient->resetRenderedObjectCount();
 
 	TheDisplay->beginBatch();
-	TheGameClient->iterateDrawablesInRegion( &axisAlignedRegion, drawablePostDraw, this );
+	TheGameClient->iterateDrawablesInRegion( m_freeCamera ? nullptr : &axisAlignedRegion, drawablePostDraw, this );	// Hypersonic @feature (D-272)
 	TheDisplay->endBatch();
 
 	TheGameClient->flushTextBearingDrawables();
@@ -2271,6 +2278,19 @@ void W3DView::setZoom(Real z)
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): the player's camera offset is based on
+// MaxCameraHeight (getCameraOffsetZ), so rebuild the zoom from the (clamped) height, without a jump
+//-------------------------------------------------------------------------------------------------
+void W3DView::applyMaxCameraHeightChange( Real oldMax, Real newMax )
+{
+	View::applyMaxCameraHeightChange( oldMax, newMax );
+	if( m_isUserControlled )
+		m_zoom = getDesiredZoom( m_pos.x, m_pos.y );
+	m_cameraAreaConstraintsValid = false;
+	m_recalcCamera = true;
+}
+
+//-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
 void W3DView::setZoomToDefault()
 {
@@ -2286,6 +2306,34 @@ void W3DView::setZoomToDefault()
 
 //-------------------------------------------------------------------------------------------------
 /** Set the horizontal field of view angle */
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature scenario free camera (Generals Hypersonic D-272, release clips): only the scenario harness calls this.
+void W3DView::setFreeCamera( const Coord3D *eye, const Coord3D *target, Real fovDegrees )
+{
+	m_freeCamera = eye != nullptr && target != nullptr;
+	if (m_freeCamera)
+	{
+		m_freeCameraEye.Set( eye->x, eye->y, eye->z );
+		m_freeCameraTarget.Set( target->x, target->y, target->z );
+		if ((m_freeCameraEye - m_freeCameraTarget).Length() < 0.01f)
+			m_freeCameraTarget.X += 1.0f;	// Look_At needs two different points
+	}
+	if (m_3DCamera)
+	{
+		if (m_freeCamera && fovDegrees > 0.0f)
+		{
+			m_3DCamera->Set_View_Plane( fovDegrees * PI / 180.0f, -1 );
+			m_freeCameraLens = true;
+		}
+		else if (m_freeCameraLens)
+		{
+			m_3DCamera->Set_View_Plane( m_FOV, -1 );
+			m_freeCameraLens = false;
+		}
+	}
+	m_recalcCamera = true;
+}
+
 //-------------------------------------------------------------------------------------------------
 void W3DView::setFieldOfView( Real angle )
 {
@@ -3574,7 +3622,7 @@ void W3DView::moveAlongWaypointPath(Real milliseconds)
  * impluse, after which the camera vibrates back to its rest position.
  * @todo This should be part of "View", not "W3DView". */
 // ------------------------------------------------------------------------------------------------
-void W3DView::shake( const Coord3D *epicenter, CameraShakeType shakeType )
+void W3DView::shake( const Coord3D *epicenter, CameraShakeType shakeType, Real intensityScale )
 {
 	Real angle = GameClientRandomValueReal( 0, 2*PI );
 
@@ -3608,6 +3656,9 @@ void W3DView::shake( const Coord3D *epicenter, CameraShakeType shakeType )
 			intensity = TheGlobalData->m_shakeCineInsaneIntensity;
 			break;
 	}
+
+	// Hypersonic @feature (Generals Hypersonic D-060) a scaled explosion shakes in proportion to its size
+	intensity *= intensityScale;
 
 	// intensity falls off with distance
 	/// @todo make this 3D once we have the real "lookat" spot
@@ -3721,7 +3772,13 @@ bool W3DView::getDesiredTerrainDrawSize(ICoord2D &dimensions) const
 
 	const Real cameraPitch = asin(fabs(m_3DCamera->Get_Forward_Dir().Z));
 
-	if (cameraPitch > ViewDefaultLowPitchRadians || !m_isUserControlled)
+	// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): a player camera zoomed out above the
+	// stock-like heights sees past the normal terrain draw window (black at the far screen corners at 850), so it
+	// takes the larger low-angle draw size too (client only)
+	const Real HYPERSONIC_FAR_ZOOM_HEIGHT = 600.0f;
+	const Bool farZoom = m_isUserControlled && m_currentHeightAboveGround > HYPERSONIC_FAR_ZOOM_HEIGHT;
+
+	if ((cameraPitch > ViewDefaultLowPitchRadians && !farZoom) || !m_isUserControlled)
 	{
 		// TheSuperHackers @info The scripted camera always uses the regular draw sizes
 		// and uses terrain oversize if it needs to enlarge.

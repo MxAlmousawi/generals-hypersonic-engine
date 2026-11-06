@@ -22,6 +22,10 @@
 
 void W3D_TakeCompressedScreenshot(ScreenshotFormat format, Int jpegQuality);
 
+// Hypersonic @feature (D-049) Save the back buffer as a PNG at this path now, on the calling thread.
+void W3D_TakeScreenshotToFile(const char* pngPath);
+void W3D_ScreenshotFailed(const char* pngPath, const char* why);	///< writes <pngPath>.err.txt
+
 // Called once per frame on the main thread to show messages for screenshots
 // that the screenshot thread has finished writing.
 void W3D_UpdateScreenshotMessages();

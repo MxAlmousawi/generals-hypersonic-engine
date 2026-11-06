@@ -888,6 +888,12 @@ ControlBar::ControlBar()
 	m_observedPlayer = nullptr;
 	m_buildToolTipLayout = nullptr;
 	m_showBuildToolTipLayout = FALSE;
+	// Hypersonic @feature hold to repeat-buy (Generals Hypersonic D-096)
+	m_repeatBuildWindow = nullptr;
+	m_repeatBuildButton = nullptr;
+	m_repeatBuildFactory = INVALID_ID;
+	m_repeatBuildNextMs = 0;
+	m_repeatBuildSending = FALSE;
 
 	m_animateDownWin1Pos.x = m_animateDownWin1Pos.y = 0;
 	m_animateDownWin1Size.x = m_animateDownWin1Size.y = 0;
@@ -1323,6 +1329,7 @@ void ControlBar::reset()
 	m_isObserverCommandBar = FALSE; // reset us to use a normal command bar
 	m_observerLookAtPlayer = nullptr;
 	m_observedPlayer = nullptr;
+	stopRepeatBuild();	// Hypersonic @feature hold to repeat-buy (Generals Hypersonic D-096)
 
 	if(m_buildToolTipLayout)
 		m_buildToolTipLayout->hide(TRUE);
@@ -1449,6 +1456,15 @@ void ControlBar::update()
 	}*/
 
 	updateSpecialPowerShortcut();
+
+	// Hypersonic @feature (D-046): an armed launch salvo ends by itself once nothing of that type is ready.
+	const CommandButton *armedCommand = TheInGameUI->getGUICommand();
+	if( isStickyLaunchCommand( armedCommand ) && countReadyLaunches( armedCommand ) <= 0 )
+		TheInGameUI->setGUICommand( nullptr );
+
+	// Hypersonic @feature hold to repeat-buy (Generals Hypersonic D-096)
+	updateRepeatBuild();
+
 	// if we're an observer, don't do the complete update
 	if( m_isObserverCommandBar)
 	{
@@ -2524,6 +2540,18 @@ void ControlBar::setControlCommand( GameWindow *button, const CommandButton *com
 	//button->winSetUserData( commandButton );
 
 	setCommandBarBorder(button, commandButton->getCommandButtonMappedBorderType());
+
+	// Hypersonic @feature upgrade badge (Generals Hypersonic D-099)
+	// Every upgrade command button (player or object upgrade, any faction; not science purchases,
+	// powers or cancel buttons) gets the IR_UpgradeBadge image over its top-right corner. Client-side
+	// only; without the image (no mod) nothing is drawn.
+	{
+		GUICommandType type = commandButton->getCommandType();
+		const Image *badge = nullptr;
+		if( ( type == GUI_COMMAND_PLAYER_UPGRADE || type == GUI_COMMAND_OBJECT_UPGRADE ) && TheMappedImageCollection )
+			badge = TheMappedImageCollection->findImageByName( "IR_UpgradeBadge" );
+		GadgetButtonDrawBadgeImage( button, badge );
+	}
 
 	if (TheHotKeyManager)
 	{
@@ -3742,7 +3770,13 @@ void ControlBar::drawSpecialPowerShortcutMultiplierText()
 			{
 				numReady = ThePlayerList->getLocalPlayer()->countReadyShortcutSpecialPowersOfType( spTemplate->getSpecialPowerType() );
 			}
-			if( numReady > 1 ) // Lorenzen changed... Displaying a "1" is superfluous
+			Bool showSingle = FALSE;
+#if RTS_ZEROHOUR
+			// Hypersonic @feature Launch facility buttons (D-039) count loaded munitions: show every count, 1 too.
+			if( spTemplate && spTemplate->getSpecialPowerType() >= SPECIAL_MUNITION_LAUNCH_1 && spTemplate->getSpecialPowerType() <= SPECIAL_MUNITION_LAUNCH_7 )	// D-245: 7 = Qadr
+				showSingle = TRUE;
+#endif
+			if( numReady > 1 || (showSingle && numReady == 1) ) // Lorenzen changed... Displaying a "1" is superfluous
 			{
 				UnicodeString unibuffer;
 				unibuffer.format( L"%d", numReady );
@@ -3763,6 +3797,61 @@ void ControlBar::drawSpecialPowerShortcutMultiplierText()
 	}
 }
 
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature Launch buttons (D-046): the facility and side-bar buttons of a MunitionLaunchPower keep
+// their targeting mode after a launch, so each further click fires the next ready munition of that type.
+//-------------------------------------------------------------------------------------------------
+Bool ControlBar::isStickyLaunchCommand( const CommandButton *command )
+{
+#if RTS_ZEROHOUR
+	if( command == nullptr )
+		return FALSE;
+	if( command->getCommandType() != GUI_COMMAND_SPECIAL_POWER && command->getCommandType() != GUI_COMMAND_SPECIAL_POWER_FROM_SHORTCUT )
+		return FALSE;
+	const SpecialPowerTemplate *spTemplate = command->getSpecialPowerTemplate();
+	if( spTemplate == nullptr )
+		return FALSE;
+	SpecialPowerType type = spTemplate->getSpecialPowerType();
+	return type >= SPECIAL_MUNITION_LAUNCH_1 && type <= SPECIAL_MUNITION_LAUNCH_7;	// D-245: 7 = Qadr
+#else
+	return FALSE;
+#endif
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-046): the ready count the button shows. The side-bar button counts every facility of
+// the local player; the facility button counts the selected facilities (the ones its launch is sent to).
+//-------------------------------------------------------------------------------------------------
+Int ControlBar::countReadyLaunches( const CommandButton *command )
+{
+#if RTS_ZEROHOUR
+	Player *player = ThePlayerList->getLocalPlayer();
+	if( player == nullptr || !isStickyLaunchCommand( command ) )
+		return 0;
+
+	const SpecialPowerTemplate *spTemplate = command->getSpecialPowerTemplate();
+	if( command->getCommandType() == GUI_COMMAND_SPECIAL_POWER_FROM_SHORTCUT )
+		return player->countReadyShortcutSpecialPowersOfType( spTemplate->getSpecialPowerType() );
+
+	Int count = 0;
+	const DrawableList *selected = TheInGameUI->getAllSelectedDrawables();
+	for( DrawableListCIt it = selected->begin(); it != selected->end(); ++it )
+	{
+		const Object *obj = (*it) ? (*it)->getObject() : nullptr;
+		if( obj == nullptr || obj->getControllingPlayer() != player || obj->isDisabled() || obj->isEffectivelyDead() )
+			continue;
+		SpecialPowerModuleInterface *mod = obj->getSpecialPowerModule( spTemplate );
+		Int ready = mod ? mod->getShortcutReadyCount() : 0;
+		if( ready > 0 )
+			count += ready;
+	}
+	return count;
+#else
+	return 0;
+#endif
+}
+
+//-------------------------------------------------------------------------------------------------
 void ControlBar::animateSpecialPowerShortcut( Bool isOn )
 {
 	if(!m_specialPowerShortcutParent || !m_animateWindowManagerForGenShortcuts || !m_currentlyUsedSpecialPowersButtons)

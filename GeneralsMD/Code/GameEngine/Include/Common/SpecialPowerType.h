@@ -127,6 +127,19 @@ enum SpecialPowerType CPP_11(: Int)
 
 	SPECIAL_BATTLESHIP_BOMBARDMENT,
 
+	// Hypersonic @feature Launch facility side-bar buttons, one per munition type (MunitionLaunchPower, D-039).
+	SPECIAL_MUNITION_LAUNCH_1,
+	SPECIAL_MUNITION_LAUNCH_2,
+	SPECIAL_MUNITION_LAUNCH_3,
+	SPECIAL_MUNITION_LAUNCH_4,
+	SPECIAL_MUNITION_LAUNCH_5,
+	SPECIAL_MUNITION_LAUNCH_6,
+	SPECIAL_MUNITION_LAUNCH_7,	// Hypersonic @feature (D-245) Qadr cluster missile
+
+	SPECIAL_IRAN_ALMAS_STRIKE, // Hypersonic @feature (D-246) Gaza guided strike
+	SPECIAL_IRAN_GAZA_GUARD, // Hypersonic @feature (D-246 Update 6)
+	SPECIAL_IRAN_GAZA_RELEASE,
+
 	SPECIALPOWER_COUNT,
 	// don't forget to add new strings to SpecialPowerMaskType::s_bitNameList[]
 };

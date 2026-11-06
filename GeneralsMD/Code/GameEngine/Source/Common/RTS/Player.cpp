@@ -74,6 +74,7 @@
 #include "GameClient/ControlBar.h"
 #include "GameClient/Drawable.h"
 #include "GameClient/Eva.h"
+#include "GameLogic/HypersonicScenario.h"
 #include "GameClient/GameClient.h"
 #include "GameClient/GameText.h"
 
@@ -1158,10 +1159,11 @@ Bool Player::isSkirmishAIPlayer()
 /**
  * Find a good spot to fire a superweapon.
  */
-Bool Player::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *retPos, Int playerNdx, Real weaponRadius)
+Bool Player::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *retPos, Int playerNdx, Real weaponRadius, const Coord3D *minRangeFrom, Real minRange)
 {
 	if (m_ai) {
-		return m_ai->computeSuperweaponTarget(power, retPos, playerNdx, weaponRadius);
+		// Hypersonic @feature (D-172) pass the power's minimum range through to the target search
+		return m_ai->computeSuperweaponTarget(power, retPos, playerNdx, weaponRadius, minRangeFrom, minRange);
 	}
 
   return FALSE;
@@ -1300,6 +1302,14 @@ static void doCountSpecialPowersReady( Object *obj, void *userData )
 			SpecialPowerModuleInterface *spmInterface = obj->findSpecialPowerModuleInterface( info->spType );
 			if( spmInterface && !spmInterface->isScriptOnly() )
 			{
+				// Hypersonic @feature Launch facilities (D-039): count the loaded munitions, not the facilities.
+				Int stackCount = spmInterface->getShortcutReadyCount();
+				if( stackCount >= 0 )
+				{
+					if( !obj->isDisabled() )
+						info->numReady += stackCount;
+					return;
+				}
 
 	      if( spmInterface->getSpecialPowerTemplate()->isSharedNSync() && info->numReady == 1 )
 				{
@@ -1699,6 +1709,14 @@ void Player::onStructureConstructionComplete( Object *builder, Object *structure
 
 	if (structure->hasSpecialPower(SPECIAL_SCUD_STORM))
   {
+    if( TheHypersonicScenario )
+    {
+      // Hypersonic @feature (D-163 test) which "detected" event enemies hear for this SCUD-Storm-type building
+      SpecialPowerModuleInterface *sp = structure->findSpecialPowerModuleInterface( SPECIAL_SCUD_STORM );
+      const SpecialPowerTemplate *spt = sp ? sp->getSpecialPowerTemplate() : nullptr;
+      TheHypersonicScenario->noteAI( "EVA detected %s: enemies hear %s", structure->getTemplate()->getName().str(),
+        ( spt && spt->getEvaDetectedEnemy().isNotEmpty() ) ? spt->getEvaDetectedEnemy().str() : "SuperweaponDetected_Enemy_ScudStorm" );
+    }
     if ( localPlayer == structure->getControllingPlayer() )
     {
       TheEva->setShouldPlay(EVA_SuperweaponDetected_Own_ScudStorm);
@@ -1710,7 +1728,12 @@ void Player::onStructureConstructionComplete( Object *builder, Object *structure
     }
     else
     {
-      TheEva->setShouldPlay(EVA_SuperweaponDetected_Enemy_ScudStorm);
+      // Hypersonic @feature (D-163) a SCUD-Storm-type power may name the event its enemies hear (Khorramshahr: a short
+      // siren, not "Enemy SCUD Storm detected"); a real SCUD Storm keeps the stock event
+      SpecialPowerModuleInterface *sp = structure->findSpecialPowerModuleInterface( SPECIAL_SCUD_STORM );
+      const SpecialPowerTemplate *spt = sp ? sp->getSpecialPowerTemplate() : nullptr;
+      EvaMessage msg = ( spt && spt->getEvaDetectedEnemy().isNotEmpty() ) ? Eva::nameToMessage( spt->getEvaDetectedEnemy() ) : EVA_Invalid;
+      TheEva->setShouldPlay( msg != EVA_Invalid ? msg : EVA_SuperweaponDetected_Enemy_ScudStorm );
     }
   }
 }
@@ -3363,6 +3386,26 @@ void Player::expressSpecialPowerReadyFrame( const SpecialPowerTemplate *temp, Un
 
 
 
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature Launch gap timers (D-039): the shared ready frame of a power, if this player has one.
+// Unlike getOrStartSpecialPowerReadyFrame it never adds a timer, so the client may call it.
+Bool Player::findSpecialPowerReadyFrame( const SpecialPowerTemplate *temp, UnsignedInt *frame ) const
+{
+	if( temp == nullptr )
+		return FALSE;
+
+	for( SpecialPowerReadyTimerList::const_iterator it = m_specialPowerReadyTimerList.begin(); it != m_specialPowerReadyTimerList.end(); ++it )
+	{
+		if( it->m_templateID == temp->getID() )
+		{
+			if( frame )
+				*frame = it->m_readyFrame;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
 
 //-------------------------------------------------------------------------------------------------
 UnsignedInt Player::getOrStartSpecialPowerReadyFrame( const SpecialPowerTemplate *temp)

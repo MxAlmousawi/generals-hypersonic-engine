@@ -50,6 +50,7 @@
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/InGameUI.h"
+#include "GameClient/Mouse.h"	// Hypersonic @feature hold to repeat-buy (Generals Hypersonic D-096)
 #include "GameClient/AnimateWindowManager.h"
 
 #include "GameLogic/GameLogic.h"
@@ -396,6 +397,10 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 												 commandButton->getThingTemplate()->getName().str()) );
 
 			CanMakeType cmt = TheBuildAssistant->canMakeUnit(factory, whatToBuild);
+
+			// Hypersonic @feature hold to repeat-buy (Generals Hypersonic D-096) a mouse press held here
+			// buys again later (updateRepeatBuild); nothing changes for this press.
+			noteRepeatBuildPress( control, commandButton, factory, cmt == CANMAKE_OK );
 
 			if (cmt == CANMAKE_NO_MONEY)
 			{
@@ -905,3 +910,111 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 
 }
 
+//-------------------------------------------------------------------------------------------------
+/** Hypersonic @feature hold to repeat-buy (Generals Hypersonic D-096)
+
+	Owner (01/10/2026): "the hold to repeat buy is PC also not only the mobile it is general logic".
+	The same rule as the Android touch hold (D-091), for the mouse. A factory's command buttons
+	trigger on the press (ControlBar.wnd: ON_MOUSE_DOWN), so the press has already bought one, as
+	any click does. While the left button stays down and the cursor stays over that button, it is
+	pressed again after REPEAT_BUILD_DELAY_MS and then every REPEAT_BUILD_INTERVAL_MS.
+
+	A repeat is a GWM_LEFT_DOWN sent to the button -- the input the window manager delivers for a
+	click -- so it plays the click, reaches processCommandUI through GBM_SELECTED and sends the same
+	MSG_QUEUE_UNIT_CREATE with the same money, queue, parking and unit-cap checks and messages.
+	Nothing here touches the logic: replays and network games see ordinary clicks.
+
+	A hold starts only from a real mouse press: processCommandUI reports every unit-build press
+	(noteRepeatBuildPress), and it counts only when the left button is down over that command window
+	at that moment and it is not one of our own repeats. Keyboard hotkeys and scripted presses
+	therefore never start one. Repeats stop for the rest of the hold when the button is released, the
+	cursor leaves the button, the window no longer shows the same unit-build button or is hidden or
+	disabled, the selected factory changes, or a press is refused (canMakeUnit() is asked first; a
+	refused press is still sent once so the player gets the stock feedback, then no more). */
+//-------------------------------------------------------------------------------------------------
+enum { REPEAT_BUILD_DELAY_MS = 300, REPEAT_BUILD_INTERVAL_MS = 100 };
+
+static Bool isLeftMouseHeldOver( GameWindow *win )
+{
+	if( TheMouse == nullptr || win == nullptr )
+		return FALSE;
+	const MouseIO *mouse = TheMouse->getMouseStatus();
+	if( mouse->leftState != MBS_Down && mouse->leftState != MBS_DoubleClick )	// a double click is a press too (WindowXlat)
+		return FALSE;
+	for( GameWindow *w = win; w != nullptr; w = w->winGetParent() )
+		if( w->winIsHidden() )
+			return FALSE;
+	return win->winPointInWindow( mouse->pos.x, mouse->pos.y );
+}
+
+void ControlBar::stopRepeatBuild()
+{
+	m_repeatBuildWindow = nullptr;
+	m_repeatBuildButton = nullptr;
+	m_repeatBuildFactory = INVALID_ID;
+	m_repeatBuildNextMs = 0;
+}
+
+void ControlBar::noteRepeatBuildPress( GameWindow *control, const CommandButton *commandButton,
+																			 const Object *factory, Bool accepted )
+{
+	if( m_repeatBuildSending )
+		return;	// our own repeat: the hold already knows
+
+	stopRepeatBuild();	// any other unit-build press ends a previous hold
+
+	if( !accepted || factory == nullptr || commandButton == nullptr ||
+			commandButton->getThingTemplate() == nullptr || m_currContext == CB_CONTEXT_MULTI_SELECT )
+		return;	// a refused press already showed its message; nothing to repeat
+
+	Bool isCommandWindow = FALSE;
+	for( Int i = 0; control != nullptr && i < MAX_COMMANDS_PER_SET; ++i )
+		if( m_commandWindows[ i ] == control )
+			isCommandWindow = TRUE;
+	if( !isCommandWindow || !isLeftMouseHeldOver( control ) )
+		return;	// not a mouse press on the command bar (a hotkey, a script)
+
+	m_repeatBuildWindow = control;
+	m_repeatBuildButton = commandButton;
+	m_repeatBuildFactory = factory->getID();
+	m_repeatBuildNextMs = timeGetTime() + REPEAT_BUILD_DELAY_MS;
+}
+
+void ControlBar::updateRepeatBuild()
+{
+	GameWindow *win = m_repeatBuildWindow;
+	if( win == nullptr )
+		return;
+
+	Object *factory = m_currentSelectedDrawable ? m_currentSelectedDrawable->getObject() : nullptr;
+	if( TheWindowManager == nullptr || TheBuildAssistant == nullptr ||
+			factory == nullptr || factory->getID() != m_repeatBuildFactory ||
+			m_currContext == CB_CONTEXT_MULTI_SELECT ||
+			!win->winGetEnabled() ||
+			(const CommandButton *)GadgetButtonGetData( win ) != m_repeatBuildButton ||
+			!isLeftMouseHeldOver( win ) )
+	{
+		stopRepeatBuild();
+		return;
+	}
+
+	const UnsignedInt now = timeGetTime();
+	if( (Int)( now - m_repeatBuildNextMs ) < 0 )
+		return;
+
+	const Bool refused = TheBuildAssistant->canMakeUnit( factory, m_repeatBuildButton->getThingTemplate() ) != CANMAKE_OK;
+	const ICoord2D pos = TheMouse->getMouseStatus()->pos;
+	m_repeatBuildSending = TRUE;
+	TheWindowManager->winSendInputMsg( win, GWM_LEFT_DOWN, SHORTTOLONG( pos.x, pos.y ), 0 );
+	m_repeatBuildSending = FALSE;
+
+	if( refused )
+		stopRepeatBuild();
+	else
+	{
+		// on the schedule, so frame steps do not stretch 0.1 s; after a stall, from now (no burst)
+		m_repeatBuildNextMs += REPEAT_BUILD_INTERVAL_MS;
+		if( (Int)( m_repeatBuildNextMs - now ) <= 0 )
+			m_repeatBuildNextMs = now + REPEAT_BUILD_INTERVAL_MS;
+	}
+}

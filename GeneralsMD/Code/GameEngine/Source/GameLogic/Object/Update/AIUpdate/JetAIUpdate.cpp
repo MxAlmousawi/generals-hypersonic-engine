@@ -27,8 +27,11 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_LOCOMOTORSET_NAMES
+#define DEFINE_WEAPONSLOTTYPE_NAMES
 
 #include "Common/ActionManager.h"
+#include "Common/Player.h"
+#include "GameClient/ControlBar.h"
 #include "Common/GlobalData.h"
 #include "Common/MiscAudio.h"
 #include "Common/ThingFactory.h"
@@ -42,6 +45,7 @@
 #include "GameLogic/Module/JetAIUpdate.h"
 #include "GameLogic/Module/ParkingPlaceBehavior.h"
 #include "GameLogic/Module/PhysicsUpdate.h"
+#include "GameLogic/Module/SpecialAbilityUpdate.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/PartitionManager.h"
@@ -101,13 +105,17 @@ void JetAIUpdate::setFlag( FlagType f, Bool v)
 Bool JetAIUpdate::isOutOfSpecialReloadAmmo() const
 {
 	const Object* jet = getObject();
-	// if we have at least one special reload weapon,
+	const Int returnSlot = getJetAIUpdateModuleData()->m_returnToBaseWeaponSlot;
+	// An explicit slot only controls when to return; landing still reloads every weapon.
+	// By default, if we have at least one special reload weapon,
 	// AND all such weapons are out of ammo,
 	// return true.
 	Int specials = 0;
 	Int out = 0;
 	for( Int i = 0; i < WEAPONSLOT_COUNT;	i++ )
 	{
+		if (returnSlot != WEAPONSLOT_COUNT && i != returnSlot)
+			continue;
 		const Weapon* weapon = jet->getWeaponInWeaponSlot((WeaponSlotType)i);
 		if (weapon == nullptr || weapon->getReloadType() != RETURN_TO_BASE_TO_RELOAD)
 			continue;
@@ -155,11 +163,48 @@ protected:
 	virtual Bool allow(Object *objOther) override
 	{
 		ParkingPlaceBehaviorInterface* pp = getPP(objOther->getID());
+		// Hypersonic (D-246): a drone (the Gaza) only re-homes to a drone pad (ParkingRequiredKindOf), not a stock airfield.
+		const Object* jet = TheGameLogic->findObjectByID(m_id);
+		if (pp != nullptr && jet != nullptr && jet->isKindOf(KINDOF_DRONE) && !pp->hasParkingKindRestriction())
+			return false;
 		if (pp != nullptr && pp->reserveSpace(m_id, 0.0f, nullptr))
 			return true;
 		return false;
 	}
 };
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic (D-246, Codex review): a free drone pad for a homeless Gaza, found WITHOUT reserving (the stock
+// PartitionFilterHasParkingPlace reserves a space on every candidate it tests); the return flight reserves it.
+class PartitionFilterFreeDronePad : public PartitionFilter
+{
+private:
+	const ThingTemplate* m_jetTemplate;
+public:
+	PartitionFilterFreeDronePad(const ThingTemplate* t) : m_jetTemplate(t) { }
+protected:
+#if defined(RTS_DEBUG)
+	virtual const char* debugGetName() override { return "PartitionFilterFreeDronePad"; }
+#endif
+	virtual Bool allow(Object *objOther) override
+	{
+		ParkingPlaceBehaviorInterface* pp = getPP(objOther->getID());
+		return pp != nullptr && pp->hasParkingKindRestriction() && pp->hasAvailableSpaceFor(m_jetTemplate);
+	}
+};
+
+static Object* findFreeDronePad(Object* jet)
+{
+	PartitionFilterAcceptByKindOf					filterKind(MAKE_KINDOF_MASK(KINDOF_FS_AIRFIELD), KINDOFMASK_NONE);
+	PartitionFilterRejectByObjectStatus		filterStatus( MAKE_OBJECT_STATUS_MASK( OBJECT_STATUS_UNDER_CONSTRUCTION ), OBJECT_STATUS_MASK_NONE );
+	PartitionFilterRejectByObjectStatus		filterStatusTwo( MAKE_OBJECT_STATUS_MASK( OBJECT_STATUS_SOLD ), OBJECT_STATUS_MASK_NONE );
+	PartitionFilterRelationship						filterTeam(jet, PartitionFilterRelationship::ALLOW_ALLIES);
+	PartitionFilterAlive									filterAlive;
+	PartitionFilterSameMapStatus					filterMapStatus(jet);
+	PartitionFilterFreeDronePad						filterPad(jet->getTemplate());
+	PartitionFilter *filters[] = { &filterKind, &filterStatus, &filterStatusTwo, &filterTeam, &filterAlive, &filterPad, &filterMapStatus, nullptr };
+	return ThePartitionManager->getClosestObject( jet, HUGE_DIST, FROM_CENTER_2D, filters );
+}
 
 //-------------------------------------------------------------------------------------------------
 static Object* findSuitableAirfield(Object* jet)
@@ -1821,6 +1866,9 @@ JetAIUpdateModuleData::JetAIUpdateModuleData()
 	m_lockonFreq = 0.5;
 	m_lockonAngleSpin = 720;
 	m_returnToBaseIdleTime = 0;
+	m_returnWhenVictimDies = true;
+	m_gazaGuardMode = false;
+	m_returnToBaseWeaponSlot = WEAPONSLOT_COUNT;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1849,6 +1897,9 @@ JetAIUpdateModuleData::JetAIUpdateModuleData()
 		{ "LockonAngleSpin",							INI::parseAngleReal, nullptr, offsetof( JetAIUpdateModuleData, m_lockonAngleSpin ) },
 		{ "LockonBlinky",									INI::parseBool, nullptr, offsetof( JetAIUpdateModuleData, m_lockonBlinky ) },
 		{ "ReturnToBaseIdleTime",					INI::parseDurationUnsignedInt, nullptr, offsetof( JetAIUpdateModuleData, m_returnToBaseIdleTime ) },
+		{ "GazaGuardMode", INI::parseBool, nullptr, offsetof(JetAIUpdateModuleData, m_gazaGuardMode) }, // Hypersonic D-246
+		{ "ReturnToBaseWeaponSlot", INI::parseIndexList, TheWeaponSlotTypeNames, offsetof(JetAIUpdateModuleData, m_returnToBaseWeaponSlot) },
+		{ "ReturnWhenVictimDies",					INI::parseBool, nullptr, offsetof( JetAIUpdateModuleData, m_returnWhenVictimDies ) },	// Hypersonic @feature (D-039)
 		{ nullptr, nullptr, nullptr, 0 }
 	};
   p.add(dataFieldParse);
@@ -1882,6 +1933,13 @@ JetAIUpdate::JetAIUpdate( Thing *thing, const ModuleData* moduleData ) : AIUpdat
 
 	m_producerLocation.zero();
 	m_enginesOn = TRUE;
+	m_gazaGuarding = false;
+	m_gazaReturning = false;
+	m_gazaHasReturnPosition = false;
+	m_gazaGuardPosition.zero();
+	m_gazaReturnPosition.zero();
+	m_gazaGuardTarget = INVALID_ID;
+	m_gazaNextGuardScan = 0;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1998,6 +2056,67 @@ UpdateSleepTime JetAIUpdate::update()
 
 	ParkingPlaceBehaviorInterface* pp = getPP(getObject()->getProducerID());
 
+	// Hypersonic @feature (D-246 Update 6): empty Gaza always makes a roof sortie,
+	// then returns to a position rather than resuming/chasing its old victim.
+	if (supportsGazaGuard())
+	{
+		m_returnToBaseFrame = 0; // even a pre-Update-6 save must not return for idle
+		StateID state = getStateMachine()->getCurrentStateID();
+		Bool inFlightState = state >= JETAISTATETYPE_FIRST && state <= JETAISTATETYPE_LAST;
+		// Owner test (2026-10-29): only a guarding Gaza flies home by itself when its bombs are gone; in normal mode an
+		// empty Gaza stays under the player's orders (send it home by ordering it onto its Drone Facility).
+		// Codex review (2026-10-29): home destroyed or sold while guarding: re-home to another (drone) pad first.
+		if (m_gazaGuarding && !m_gazaReturning && !pp && !inFlightState && getFlag(ALLOW_AIR_LOCO) && isOutOfSpecialReloadAmmo()
+			&& TheGameLogic->getFrame() % LOGICFRAMES_PER_SECOND == 0)	// a search once a second
+		{
+			Object* airfield = findFreeDronePad(jet);	// no reservation here: RETURNING_FOR_LANDING reserves it
+			if (airfield != nullptr)
+			{
+				jet->setProducer(airfield);
+				pp = getPP(airfield->getID());
+			}
+		}
+		if (m_gazaGuarding && !m_gazaReturning && pp && !inFlightState && getFlag(ALLOW_AIR_LOCO) && isOutOfSpecialReloadAmmo())
+		{
+			// Owner test (2026-10-29): come back to where it was when it left (not an old order spot or the
+			// facility it taxied from); a player order given during the trip still wins (HAS_PENDING_COMMAND).
+			m_gazaReturnPosition = m_gazaGuarding ? m_gazaGuardPosition : *jet->getPosition();
+			m_gazaHasReturnPosition = true;
+			m_gazaReturning = true;
+			m_gazaGuardTarget = INVALID_ID;
+			setFlag(HAS_PENDING_COMMAND, false);
+			setFlag(ALLOW_INTERRUPT_AND_RESUME_OF_CUR_STATE_FOR_RELOAD, false);
+			setFlag(USE_SPECIAL_RETURN_LOCO, true);
+			setLastCommandSource(CMD_FROM_AI);
+			getStateMachine()->setState(RETURNING_FOR_LANDING);
+		}
+		else if (m_gazaReturning && !inFlightState && AIUpdateInterface::isIdle() &&
+			!getFlag(ALLOW_AIR_LOCO) && !isOutOfSpecialReloadAmmo())
+		{
+			m_gazaReturning = false;
+			AICommandParms move(AICMD_MOVE_TO_POSITION, CMD_FROM_AI);
+			move.m_pos = m_gazaGuarding ? m_gazaGuardPosition : m_gazaReturnPosition;
+			if (getFlag(HAS_PENDING_COMMAND))	// guarding: only an accepted in-area attack is ever pending
+			{
+				AICommandParms pending(AICMD_IDLE, CMD_FROM_AI);
+				m_mostRecentCommand.reconstitute(pending);
+				if (pending.m_cmdSource != CMD_FROM_AI && pending.m_cmd != AICMD_IDLE)
+				{
+					move = pending;
+					if (m_gazaGuarding)
+						m_gazaGuardTarget = move.m_obj ? move.m_obj->getID() : INVALID_ID;
+				}
+			}
+			doJetCommand(&move); // existing taxi, takeoff, then pending order
+		}
+		else if (m_gazaReturning && !pp)
+		{
+			// Home destroyed: stock dead-airfield flight remains available, no retry loop.
+			m_gazaReturning = false;
+		}
+		updateGazaGuard();
+	}
+
 	// If idle & out of ammo, return
 	// have to call our parent's isIdle, because we override it to never return true
 	// when we have a pending command...
@@ -2043,7 +2162,7 @@ UpdateSleepTime JetAIUpdate::update()
 		}
 
 		// note that we might still have weapons with ammo, but still be forced to return to reload.
-		if (isOutOfSpecialReloadAmmo() && getFlag(ALLOW_AIR_LOCO))
+		if (!supportsGazaGuard() && isOutOfSpecialReloadAmmo() && getFlag(ALLOW_AIR_LOCO))
 		{
 			m_returnToBaseFrame = 0;
 
@@ -2064,7 +2183,7 @@ UpdateSleepTime JetAIUpdate::update()
 			m_mostRecentCommand.reconstitute(parms);
 			setFlag(HAS_PENDING_COMMAND, false);
 
- 			aiDoCommand(&parms);
+			doJetCommand(&parms);
 		}
 		else if (m_returnToBaseFrame != 0 && now >= m_returnToBaseFrame && getFlag(ALLOW_AIR_LOCO))
 		{
@@ -2086,7 +2205,7 @@ UpdateSleepTime JetAIUpdate::update()
 			pp->setHealee(getObject(), false);
 		}
 		m_returnToBaseFrame = 0;
-		if (getFlag(ALLOW_INTERRUPT_AND_RESUME_OF_CUR_STATE_FOR_RELOAD) &&
+		if (!supportsGazaGuard() && getFlag(ALLOW_INTERRUPT_AND_RESUME_OF_CUR_STATE_FOR_RELOAD) &&
 						isOutOfSpecialReloadAmmo() && getFlag(ALLOW_AIR_LOCO))
 		{
 			setFlag(USE_SPECIAL_RETURN_LOCO, true);
@@ -2231,6 +2350,12 @@ Bool JetAIUpdate::chooseLocomotorSet(LocomotorSetType wst)
 //-------------------------------------------------------------------------------------------------
 void JetAIUpdate::setLocomotorGoalNone()
 {
+	if (m_gazaGuarding && !m_gazaReturning && m_gazaGuardTarget == INVALID_ID &&
+		getFlag(ALLOW_AIR_LOCO) && !friend_isTakeoffOrLandingInProgress())
+	{
+		setLocomotorGoalPositionExplicit(m_gazaGuardPosition);
+		return;
+	}
 	if ((getFlag(TAKEOFF_IN_PROGRESS) || getFlag(LANDING_IN_PROGRESS))
 			&& getFlag(ALLOW_AIR_LOCO) && !getFlag(ALLOW_CIRCLING))
 	{
@@ -2487,7 +2612,7 @@ void JetAIUpdate::doLandingCommand(Object *airfield, CommandSourceType cmdSource
 		if (pp == nullptr)
 			continue;
 
-		if (getObject()->isKindOf(KINDOF_PRODUCED_AT_HELIPAD) ||
+		if ((getObject()->isKindOf(KINDOF_PRODUCED_AT_HELIPAD) && pp->acceptsAircraftType(getObject()->getTemplate())) ||	// Hypersonic (D-246)
 				pp->reserveSpace(getObject()->getID(), friend_getParkingOffset(), nullptr))
 		{
 			// if we had a space at another airfield, release it
@@ -2511,7 +2636,8 @@ void JetAIUpdate::doLandingCommand(Object *airfield, CommandSourceType cmdSource
 //----------------------------------------------------------------------------------------
 void JetAIUpdate::notifyVictimIsDead()
 {
-	if (getJetAIUpdateModuleData()->m_needsRunway)
+	// Hypersonic @feature Kamikaze drones (D-039) may loiter instead: ReturnWhenVictimDies = No.
+	if (getJetAIUpdateModuleData()->m_needsRunway && getJetAIUpdateModuleData()->m_returnWhenVictimDies)
 		m_returnToBaseFrame = TheGameLogic->getFrame();
 }
 
@@ -2571,6 +2697,62 @@ Bool JetAIUpdate::isParkedAt(const Object* obj) const
 //-------------------------------------------------------------------------------------------------
 void JetAIUpdate::aiDoCommand(const AICommandParms* parms)
 {
+	// D-246 owner addendum: explicit attacks can leave Guard; plain moves/Stop cannot.
+	if (m_gazaGuarding)
+	{
+		const SpecialAbilityUpdate* almas = getObject()->findSpecialAbilityUpdate(SPECIAL_IRAN_ALMAS_STRIKE);
+		if (!m_gazaReturning && parms->m_cmdSource == CMD_FROM_AI && parms->m_cmd == AICMD_IDLE && almas && almas->isActive())
+		{
+			doJetCommand(parms); // ability preparation/finish, never a player Move/Stop
+			return;
+		}
+		const Coord3D* target = nullptr;
+		if (parms->m_cmdSource != CMD_FROM_AI)
+		{
+			if (parms->m_cmd == AICMD_ATTACK_OBJECT || parms->m_cmd == AICMD_FORCE_ATTACK_OBJECT)
+				target = parms->m_obj ? parms->m_obj->getPosition() : nullptr;
+			else if (parms->m_cmd == AICMD_ATTACK_POSITION || parms->m_cmd == AICMD_ATTACK_AREA)
+				target = &parms->m_pos;
+		}
+		if (!target)
+			return;
+		if (!canReachFromGazaGuard(*target, PRIMARY_WEAPON))
+			releaseGazaGuard();
+		else
+		{
+			if (!m_gazaReturning)
+			{
+				m_gazaGuardTarget = parms->m_obj ? parms->m_obj->getID() : INVALID_ID;
+				doJetCommand(parms);
+			}
+			else
+			{
+				// Codex review (2026-10-29): an in-area attack ordered during the rearm trip is kept for after it.
+				m_mostRecentCommand.store(*parms);
+				setFlag(HAS_PENDING_COMMAND, true);
+			}
+			return;
+		}
+	}
+	if (supportsGazaGuard())
+	{
+		rememberGazaReturnPosition(parms);
+		if (m_gazaReturning)
+		{
+			// Keep the explicit order for after rearm, including its object target.
+			if (parms->m_cmdSource != CMD_FROM_AI)
+			{
+				m_mostRecentCommand.store(*parms);
+				setFlag(HAS_PENDING_COMMAND, true);
+			}
+			return;
+		}
+	}
+	doJetCommand(parms);
+}
+
+void JetAIUpdate::doJetCommand(const AICommandParms* parms)
+{
 	// call this from aiDoCommand as well as update, because this can
 	// be called before update ever is... if the unit is placed on a map,
 	// and a script tells it to do something with a condition of TRUE!
@@ -2578,6 +2760,13 @@ void JetAIUpdate::aiDoCommand(const AICommandParms* parms)
 
 	if (!isAllowedToRespondToAiCommands(parms))
 		return;
+
+	if (supportsGazaGuard() && getStateMachine()->getCurrentStateID() == RELOAD_AMMO)
+	{
+		m_mostRecentCommand.store(*parms);
+		setFlag(HAS_PENDING_COMMAND, true);
+		return;
+	}
 
 	// note that we always store this, even if nothing will be "pending".
 	m_mostRecentCommand.store(*parms);
@@ -2596,7 +2785,7 @@ void JetAIUpdate::aiDoCommand(const AICommandParms* parms)
 		setFlag(HAS_PENDING_COMMAND, true);
 		return;
 	}
-	else if( parms->m_cmd == AICMD_IDLE && getObject()->isAirborneTarget() && !getObject()->isKindOf( KINDOF_PRODUCED_AT_HELIPAD ) )
+	else if( !supportsGazaGuard() && parms->m_cmd == AICMD_IDLE && getObject()->isAirborneTarget() && !getObject()->isKindOf( KINDOF_PRODUCED_AT_HELIPAD ) )
 	{
 		getStateMachine()->clear();
 		setLastCommandSource( CMD_FROM_AI );
@@ -2728,6 +2917,41 @@ void JetAIUpdate::friend_purgePendingCommand()
 	setFlag(HAS_PENDING_COMMAND, false);
 }
 
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature Aiming launchers (D-039): while a parked jet waits to take off with an attack or
+// move order, where that order points. Read by the client to turn a launcher: const, no side effects.
+Bool JetAIUpdate::friend_getPendingCommandTarget( Coord3D *pos ) const
+{
+	if( !getFlag( HAS_PENDING_COMMAND ) || pos == nullptr )
+		return FALSE;
+
+	switch( m_mostRecentCommand.getCommandType() )
+	{
+		case AICMD_ATTACK_OBJECT:
+		case AICMD_FORCE_ATTACK_OBJECT:
+		case AICMD_MOVE_TO_OBJECT:
+		case AICMD_GUARD_OBJECT:
+		{
+			const Object *target = TheGameLogic->findObjectByID( m_mostRecentCommand.getObjectID() );
+			if( target == nullptr )
+				return FALSE;
+			*pos = *target->getPosition();
+			return TRUE;
+		}
+
+		case AICMD_ATTACK_POSITION:
+		case AICMD_ATTACKMOVE_TO_POSITION:
+		case AICMD_MOVE_TO_POSITION:
+		case AICMD_GUARD_POSITION:
+		case AICMD_ATTACK_AREA:
+			*pos = *m_mostRecentCommand.getPosition();
+			return TRUE;
+
+		default:
+			return FALSE;
+	}
+}
+
 // ------------------------------------------------------------------------------------------------
 /** CRC */
 // ------------------------------------------------------------------------------------------------
@@ -2735,6 +2959,16 @@ void JetAIUpdate::crc( Xfer *xfer )
 {
 	// extend base class
 	AIUpdateInterface::crc(xfer);
+	if (supportsGazaGuard())
+	{
+		xfer->xferBool(&m_gazaGuarding);
+		xfer->xferBool(&m_gazaReturning);
+		xfer->xferBool(&m_gazaHasReturnPosition);
+		xfer->xferCoord3D(&m_gazaGuardPosition);
+		xfer->xferCoord3D(&m_gazaReturnPosition);
+		xfer->xferObjectID(&m_gazaGuardTarget);
+		xfer->xferUnsignedInt(&m_gazaNextGuardScan);
+	}
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2749,11 +2983,7 @@ void JetAIUpdate::xfer( Xfer *xfer )
 {
 
   // version
-#if RETAIL_COMPATIBLE_XFER_SAVE
-	XferVersion currentVersion = 2;
-#else
-	XferVersion currentVersion = 3;
-#endif
+	XferVersion currentVersion = 4; // Hypersonic D-246: guard and return sortie state
   XferVersion version = currentVersion;
   xfer->xferVersion( &version, currentVersion );
 
@@ -2809,6 +3039,16 @@ void JetAIUpdate::xfer( Xfer *xfer )
 	{
 		xfer->xferCoord3D(&m_landingPosForHelipadStuff);
 	}
+	if (version >= 4)
+	{
+		xfer->xferBool(&m_gazaGuarding);
+		xfer->xferBool(&m_gazaReturning);
+		xfer->xferBool(&m_gazaHasReturnPosition);
+		xfer->xferCoord3D(&m_gazaGuardPosition);
+		xfer->xferCoord3D(&m_gazaReturnPosition);
+		xfer->xferObjectID(&m_gazaGuardTarget);
+		xfer->xferUnsignedInt(&m_gazaNextGuardScan);
+	}
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2816,6 +3056,8 @@ void JetAIUpdate::xfer( Xfer *xfer )
 // ------------------------------------------------------------------------------------------------
 void JetAIUpdate::loadPostProcess()
 {
+	if (supportsGazaGuard())
+		refreshGazaCommandSet();
 	//When drawables are created, so are their ambient sounds. After loading, only turn off the
 	//ambient sound if the engine is off.
 	if( !m_enginesOn )
@@ -2829,4 +3071,223 @@ void JetAIUpdate::loadPostProcess()
 
 	// extend base class
 	AIUpdateInterface::loadPostProcess();
+}
+
+// Hypersonic @feature (D-246 Update 6): no replacement, RNG or client-driven state.
+void JetAIUpdate::refreshGazaCommandSet()
+{
+	getObject()->setCommandSetStringOverride(m_gazaGuarding ? "IranAirGazaGuardCommandSet" : "IranAirGazaCommandSet");
+	if (TheControlBar)
+		TheControlBar->markUIDirty();
+}
+
+void JetAIUpdate::setGazaGuardPosition(const Coord3D& pos)
+{
+	if (!supportsGazaGuard() || m_gazaGuarding)
+		return;
+	m_gazaGuarding = true;
+	m_gazaGuardPosition = pos;
+	m_gazaReturnPosition = pos;
+	m_gazaHasReturnPosition = true;
+	m_gazaGuardTarget = INVALID_ID;
+	m_gazaNextGuardScan = 0;
+	setFlag(HAS_PENDING_COMMAND, false);	// no normal-mode order carries over into Guard
+	refreshGazaCommandSet();
+	if (!m_gazaReturning)
+	{
+		AICommandParms move(AICMD_MOVE_TO_POSITION, CMD_FROM_AI);
+		move.m_pos = pos;
+		doJetCommand(&move);
+	}
+}
+
+void JetAIUpdate::releaseGazaGuard()
+{
+	if (!supportsGazaGuard() || !m_gazaGuarding)
+		return;
+	m_gazaGuarding = false;
+	m_gazaGuardTarget = INVALID_ID;
+	refreshGazaCommandSet();
+	if (!m_gazaReturning)
+	{
+		AICommandParms stop(AICMD_IDLE, CMD_FROM_AI);
+		doJetCommand(&stop);
+	}
+}
+
+// Manual reach includes the existing 450 guard area and weapons reachable from the orbit.
+// No current aircraft position is used: the boundary stays fixed while circling/rearming.
+Bool JetAIUpdate::canReachFromGazaGuard(const Coord3D& pos, WeaponSlotType slot) const
+{
+	const Weapon* weapon = getObject()->getWeaponInWeaponSlot(slot);
+	Real orbit = 0.0f;
+	// Use the flight template even when currently taxiing on the roof.
+	LocomotorTemplateMap::const_iterator normal = getJetAIUpdateModuleData()->m_locomotorTemplates.find(LOCOMOTORSET_NORMAL);
+	const LocomotorTemplateVector empty;
+	const LocomotorTemplateVector& flight = normal != getJetAIUpdateModuleData()->m_locomotorTemplates.end() ? normal->second : empty;
+	if (!flight.empty())
+		orbit = fabsf(flight.front()->getCirclingRadius());
+	const Real reach = __max(getObject()->getVisionRange(), orbit +
+		(weapon ? weapon->getTemplate()->getUnmodifiedAttackRange() : 0.0f));
+	const Real dx = pos.x - m_gazaGuardPosition.x;
+	const Real dy = pos.y - m_gazaGuardPosition.y;
+	return dx*dx + dy*dy <= reach*reach;
+}
+
+void JetAIUpdate::prepareGazaGuardStrike(const Coord3D& pos)
+{
+	if (!m_gazaGuarding)
+		return;
+	if (!canReachFromGazaGuard(pos, SECONDARY_WEAPON))
+	{
+		m_gazaReturnPosition = pos;
+		m_gazaHasReturnPosition = true;
+		releaseGazaGuard();
+		return;
+	}
+	// An in-area manual strike interrupts auto-bombing without leaving Guard.
+	m_gazaGuardTarget = INVALID_ID;
+	if (!m_gazaReturning)
+	{
+		AICommandParms idle(AICMD_IDLE, CMD_FROM_AI);
+		doJetCommand(&idle);
+	}
+}
+
+void JetAIUpdate::approachGazaGuardStrike(const Coord3D& pos)
+{
+	if (!m_gazaGuarding || m_gazaReturning)
+		return;
+	// Approach only to the near side of the orbit, then fire within the actual 600 range.
+	Coord3D approach = m_gazaGuardPosition;
+	const Real dx = pos.x - approach.x;
+	const Real dy = pos.y - approach.y;
+	const Real dist = sqrtf(dx*dx + dy*dy);
+	LocomotorTemplateMap::const_iterator normal = getJetAIUpdateModuleData()->m_locomotorTemplates.find(LOCOMOTORSET_NORMAL);
+	const LocomotorTemplateVector empty;
+	const LocomotorTemplateVector& flight = normal != getJetAIUpdateModuleData()->m_locomotorTemplates.end() ? normal->second : empty;
+	const Real orbit = flight.empty() ? 0.0f : fabsf(flight.front()->getCirclingRadius());
+	if (dist > 0.0f)
+	{
+		const Real step = __min(dist, orbit);
+		approach.x += dx * step / dist;
+		approach.y += dy * step / dist;
+	}
+	AICommandParms move(AICMD_MOVE_TO_POSITION, CMD_FROM_AI);
+	move.m_pos = approach;
+	doJetCommand(&move);
+}
+
+void JetAIUpdate::rememberGazaReturnPosition(const AICommandParms* parms)
+{
+	if (parms->m_cmdSource == CMD_FROM_AI)
+		return;	// its own taxi/exit/ability moves never become the spot to come back to
+	switch (parms->m_cmd)
+	{
+		case AICMD_MOVE_TO_POSITION:
+		case AICMD_ATTACKMOVE_TO_POSITION:
+		case AICMD_ATTACK_POSITION:
+		case AICMD_GUARD_POSITION:
+			m_gazaReturnPosition = parms->m_pos;
+			m_gazaHasReturnPosition = true;
+			break;
+		case AICMD_ATTACK_OBJECT:
+		case AICMD_FORCE_ATTACK_OBJECT:
+		case AICMD_MOVE_TO_OBJECT:
+		case AICMD_GUARD_OBJECT:
+			if (parms->m_obj)
+			{
+				m_gazaReturnPosition = *parms->m_obj->getPosition();
+				m_gazaHasReturnPosition = true;
+			}
+			break;
+		case AICMD_IDLE:
+			// Ability aiIdle must not overwrite the saved destination during rearm.
+			if (!m_gazaReturning && parms->m_cmdSource != CMD_FROM_AI)
+			{
+				m_gazaReturnPosition = *getObject()->getPosition();
+				m_gazaHasReturnPosition = true;
+			}
+			break;
+		default:
+			break;
+	}
+}
+
+class PartitionFilterGazaGuardTarget : public PartitionFilter
+{
+	Object* m_jet;
+	Coord3D m_center;
+	Bool m_includeStructures;
+public:
+	PartitionFilterGazaGuardTarget(Object* jet, const Coord3D& center, Bool includeStructures = false)
+		: m_jet(jet), m_center(center), m_includeStructures(includeStructures) { }
+#if defined(RTS_DEBUG)
+	virtual const char* debugGetName() override { return "PartitionFilterGazaGuardTarget"; }
+#endif
+	virtual Bool allow(Object* target) override
+	{
+		if (!target || target->isEffectivelyDead() || target->isAirborneTarget() ||
+			target->isKindOf(KINDOF_AIRCRAFT) || target->isKindOf(KINDOF_PROJECTILE) ||
+			(target->isKindOf(KINDOF_STRUCTURE) && !m_includeStructures) || target->isContained() || target->isOffMap() ||
+			(!target->isKindOf(KINDOF_VEHICLE) && !target->isKindOf(KINDOF_INFANTRY) &&
+			 !(m_includeStructures && target->isKindOf(KINDOF_STRUCTURE))) ||
+			m_jet->getRelationship(target) != ENEMIES)
+			return false;
+		const Real dx = target->getPosition()->x - m_center.x;
+		const Real dy = target->getPosition()->y - m_center.y;
+		const Real range = m_jet->getVisionRange();
+		if (dx*dx + dy*dy > range*range)
+			return false;
+		const Player* player = m_jet->getControllingPlayer();
+		if (!player || target->getShroudedStatus(player->getPlayerIndex()) >= OBJECTSHROUD_FOGGED ||
+			(target->testStatus(OBJECT_STATUS_STEALTHED) && !target->testStatus(OBJECT_STATUS_DETECTED)))
+			return false;
+		CanAttackResult can = m_jet->getAbleToAttackSpecificObject(ATTACK_NEW_TARGET, target, CMD_FROM_AI);
+		return can == ATTACKRESULT_POSSIBLE || can == ATTACKRESULT_POSSIBLE_AFTER_MOVING;
+	}
+};
+
+void JetAIUpdate::updateGazaGuard()
+{
+	if (!m_gazaGuarding || m_gazaReturning || getObject()->isDisabled() ||
+		getObject()->testStatus(OBJECT_STATUS_IS_USING_ABILITY))
+		return;
+	const SpecialAbilityUpdate* almas = getObject()->findSpecialAbilityUpdate(SPECIAL_IRAN_ALMAS_STRIKE);
+	if (almas && almas->isActive())
+		return; // includes approach, before IS_USING_ABILITY is set
+	const StateID state = getStateMachine()->getCurrentStateID();
+	if ((state >= JETAISTATETYPE_FIRST && state <= JETAISTATETYPE_LAST) || !getFlag(ALLOW_AIR_LOCO))
+		return;
+	const UnsignedInt now = TheGameLogic->getFrame();
+	if (now < m_gazaNextGuardScan)
+		return;
+	m_gazaNextGuardScan = now + LOGICFRAMES_PER_SECOND / 2;
+	Object* jet = getObject();
+	PartitionFilterGazaGuardTarget valid(jet, m_gazaGuardPosition);
+	Object* victim = TheGameLogic->findObjectByID(m_gazaGuardTarget);
+	PartitionFilterGazaGuardTarget existing(jet, m_gazaGuardPosition, true);
+	if (m_gazaGuardTarget != INVALID_ID && !existing.allow(victim))
+	{
+		m_gazaGuardTarget = INVALID_ID;
+		AICommandParms move(AICMD_MOVE_TO_POSITION, CMD_FROM_AI);
+		move.m_pos = m_gazaGuardPosition;
+		doJetCommand(&move);
+		return; // return to the guard spot before looking for another victim
+	}
+	if (!AIUpdateInterface::isIdle() || isOutOfSpecialReloadAmmo() || jet->testStatus(OBJECT_STATUS_IS_USING_ABILITY))
+		return;
+	if (!victim)
+	{
+		PartitionFilter* filters[] = { &valid, nullptr };
+		victim = ThePartitionManager->getClosestObject(&m_gazaGuardPosition, jet->getVisionRange(), FROM_CENTER_2D, filters);
+	}
+	if (victim)
+	{
+		m_gazaGuardTarget = victim->getID();
+		AICommandParms attack(AICMD_ATTACK_OBJECT, CMD_FROM_AI);
+		attack.m_obj = victim;
+		attack.m_intValue = NO_MAX_SHOTS_LIMIT;
+		doJetCommand(&attack);
+	}
 }

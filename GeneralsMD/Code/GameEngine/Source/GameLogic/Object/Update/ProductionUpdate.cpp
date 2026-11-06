@@ -50,11 +50,29 @@
 
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Module/CreateModule.h"
+#include "GameLogic/Module/MunitionMagazineUpdate.h"
 #include "GameLogic/Module/ParkingPlaceBehavior.h"
 #include "GameLogic/Module/ProductionUpdate.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/ScriptEngine.h"
 
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature Launch facilities (D-039): a munition bought here goes into the magazine that
+// stores its type instead of coming out as a unit.
+static MunitionMagazineInterface* findMunitionMagazine( const Object *producer, const ThingTemplate *unitType )
+{
+	if( unitType == nullptr )
+		return nullptr;
+
+	for( BehaviorModule** m = producer->getBehaviorModules(); *m; ++m )
+	{
+		MunitionMagazineInterface* magazine = (*m)->getMunitionMagazineInterface();
+		if( magazine != nullptr && magazine->storesMunition( unitType ) )
+			return magazine;
+	}
+	return nullptr;
+}
 
 // PUBLIC /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -231,6 +249,16 @@ CanMakeType ProductionUpdate::canQueueUpgrade( const UpgradeTemplate *upgrade ) 
 //-------------------------------------------------------------------------------------------------
 CanMakeType ProductionUpdate::canQueueCreateUnit( const ThingTemplate *unitType ) const
 {
+	// Hypersonic @feature Launch facilities (D-039): a full magazine greys the button out like full parking.
+	if( findMunitionMagazine( getObject(), unitType ) != nullptr )
+	{
+		if( !hasMagazineRoomFor( unitType ) )
+			return CANMAKE_PARKING_PLACES_FULL;
+		if (m_productionCount >= getProductionUpdateModuleData()->m_maxQueueEntries)
+			return CANMAKE_QUEUE_FULL;
+		return CANMAKE_OK;
+	}
+
 	/// @todo srj -- this is horrible, but the "right" way to do it is to move
 	// ProductionUpdate to be part of ParkingPlaceBehavior, which I don't currently
 	// have time for...
@@ -249,6 +277,35 @@ CanMakeType ProductionUpdate::canQueueCreateUnit( const ThingTemplate *unitType 
 
 	return CANMAKE_OK;
 
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature Launch facilities (D-039, D-042): room in the magazine for one more purchase of this
+// type, counting the purchases of its types already queued here, in storage units (a munition may take more
+// than one). Called from the client too: const.
+// Hypersonic @feature Pad overflow (D-080): or, when the magazine has no room, an empty launcher of this type that
+// no munition of this type already stored, waiting or queued here will take: the purchase then waits for it.
+Bool ProductionUpdate::hasMagazineRoomFor( const ThingTemplate *unitType ) const
+{
+	const MunitionMagazineInterface* magazine = findMunitionMagazine( getObject(), unitType );
+	if( magazine == nullptr )
+		return TRUE;
+
+	Int claimed = magazine->getStoredSize();
+	Int queuedOfType = 0;
+	for( const ProductionEntry *production = m_productionQueue; production; production = production->m_next )
+	{
+		if( production->m_type == PRODUCTION_UNIT && findMunitionMagazine( getObject(), production->m_objectToProduce ) == magazine )
+		{
+			claimed += production->getProductionQuantityRemaining() * magazine->getMunitionSize( production->m_objectToProduce );
+			if( unitType->isEquivalentTo( production->m_objectToProduce ) )
+				queuedOfType += production->getProductionQuantityRemaining();
+		}
+	}
+	if( claimed + magazine->getMunitionSize( unitType ) <= magazine->getCapacity() )
+		return TRUE;
+
+	return queuedOfType < magazine->getUnclaimedLauncherCount( unitType );
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -361,11 +418,16 @@ Bool ProductionUpdate::queueCreateUnit( const ThingTemplate *unitType, Productio
 
 	ExitDoorType exitDoor = DOOR_NONE_AVAILABLE;
 
+	// Hypersonic @feature Launch facilities (D-039): munitions need magazine room, not a parking place.
+	Bool toMagazine = findMunitionMagazine( getObject(), unitType ) != nullptr;
+	if( toMagazine && !hasMagazineRoomFor( unitType ) )
+		return FALSE;
+
 	/// @todo srj -- this is horrible, but the "right" way to do it is to move
 	// ProductionUpdate to be part of ParkingPlaceBehavior, which I don't currently
 	// have time for...
 	ParkingPlaceBehaviorInterface* pp = nullptr;
-	for (BehaviorModule** i = getObject()->getBehaviorModules(); *i; ++i)
+	for (BehaviorModule** i = getObject()->getBehaviorModules(); *i && !toMagazine; ++i)
 	{
 		if ((pp = (*i)->getParkingPlaceBehaviorInterface()) != nullptr)
 		{
@@ -678,8 +740,20 @@ UpdateSleepTime ProductionUpdate::update()
 	if( production->m_percentComplete >= 100.0f )
 	{
 
+		// Hypersonic @feature Launch facilities (D-039): a finished munition purchase goes into the magazine.
+		MunitionMagazineInterface* magazine = production->m_type == PRODUCTION_UNIT ?
+			findMunitionMagazine( us, production->m_objectToProduce ) : nullptr;
+		if( magazine != nullptr )
+		{
+			Int quantity = production->getProductionQuantityRemaining();
+			for( Int q = 0; q < quantity; ++q )
+				magazine->addMunition( production->m_objectToProduce );
+
+			removeFromProductionQueue( production );
+			deleteInstance(production);
+		}
 		// handle unit production items
-		if( production->m_type == PRODUCTION_UNIT )
+		else if( production->m_type == PRODUCTION_UNIT )
 		{
 			Object *creationBuilding = us;
 

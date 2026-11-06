@@ -139,6 +139,18 @@ void AutoDepositUpdate::awardInitialCaptureBonus( Player *player )
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (Generals Hypersonic D-141) keep the replaced object's deposit timer (Export Contract swaps the
+// Abadan Refinery for a new object, which would otherwise restart the 20 s income timer).
+//-------------------------------------------------------------------------------------------------
+void AutoDepositUpdate::inheritDepositProgress( const AutoDepositUpdate *from )
+{
+	if( from == nullptr )
+		return;
+	UnsignedInt latest = TheGameLogic->getFrame() + getAutoDepositUpdateModuleData()->m_depositFrame;
+	m_depositOnFrame = from->m_depositOnFrame < latest ? from->m_depositOnFrame : latest;
+}
+
+//-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
 UpdateSleepTime AutoDepositUpdate::update()
 {

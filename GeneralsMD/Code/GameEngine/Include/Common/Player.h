@@ -356,6 +356,7 @@ public:
 	///< my new command center wants to init his timers to the status quo
 	UnsignedInt getOrStartSpecialPowerReadyFrame( const SpecialPowerTemplate *temp);
 	void expressSpecialPowerReadyFrame( const SpecialPowerTemplate *temp, UnsignedInt frame );
+	Bool findSpecialPowerReadyFrame( const SpecialPowerTemplate *temp, UnsignedInt *frame ) const;	///< Hypersonic @feature (D-039) read-only lookup
 	void addNewSharedSpecialPowerTimer( const SpecialPowerTemplate *temp, UnsignedInt frame );
 
 
@@ -442,7 +443,8 @@ public:
 	/// Have the team guard a supply center.
 	void guardSupplyCenter( Team *team, Int minSupplies );
 
-	virtual Bool computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *pos, Int playerNdx, Real weaponRadius); ///< Calculates best pos for weapon given radius.
+	// Hypersonic @feature (D-172) minRangeFrom/minRange: only aim at least minRange (2D) from that point
+	virtual Bool computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *pos, Int playerNdx, Real weaponRadius, const Coord3D *minRangeFrom = nullptr, Real minRange = 0.0f); ///< Calculates best pos for weapon given radius.
 
 	/// Get the enemy an ai player is currently focused on.  NOTE - Can be nullptr.
 	Player  *getCurrentEnemy();

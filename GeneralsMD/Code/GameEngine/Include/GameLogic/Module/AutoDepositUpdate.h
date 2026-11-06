@@ -119,6 +119,10 @@ public:
 	void awardInitialCaptureBonus( Player *player );	// Test and award the initial capture bonus
 	virtual UpdateSleepTime update() override;
 
+	// Hypersonic @bugfix (Generals Hypersonic D-141) an object that replaces this one (ReplaceObjectUpgrade) keeps the
+	// progress toward its next deposit instead of restarting the timer (never later than its own full interval).
+	void inheritDepositProgress( const AutoDepositUpdate *from );
+
 protected:
 
 	Int getUpgradedSupplyBoost() const;

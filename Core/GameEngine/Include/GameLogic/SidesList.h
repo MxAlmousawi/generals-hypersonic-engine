@@ -158,6 +158,10 @@ public:
 	SidesInfo *findSkirmishSideInfo(AsciiString name, Int* index = nullptr);
 
 	void prepareForMP_or_Skirmish(); // After a map is loaded, save & clear any players.
+	// Hypersonic @feature (Generals Hypersonic D-146 part B): after prepareForMP_or_Skirmish, give the skirmish side
+	// 'playerName' its scripts and teams from the standard SkirmishScripts.scb (for a side added at load to a map whose
+	// own scripts made the standard file be skipped); it always ends with a script list, empty if none was found.
+	void loadStandardSkirmishScriptsForSide(const AsciiString& playerName);
 
 	Int getNumTeams() { return m_teamrec.getNumTeams(); }
 	void emptyTeams();

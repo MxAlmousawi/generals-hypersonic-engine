@@ -194,6 +194,7 @@ public:
 	Real m_cameraHeight;
 #endif
 	Real m_maxCameraHeight;
+	Real m_gameDataMaxCameraHeight;	///< Hypersonic @fix (D-223) GameData.ini's MaxCameraHeight, before the player's zoom-out choice
 	Real m_minCameraHeight;
 	Real m_terrainHeightAtEdgeOfMap;
 	Real m_unitDamagedThresh;
@@ -356,6 +357,8 @@ public:
 	AsciiString m_pendingFile;				///< If this is specified, use this map at the next game start
 	AsciiString m_loadSaveGame;				///< If this is specified, load a save game file from the command-line
 	AsciiString m_loadReplayGame;			///< If this is specified, play a replay file from the command-line
+	AsciiString m_hypersonicScenario;				///< Hypersonic @feature (D-049) -hypersonicScenario: scenario file of the dev test harness
+	AsciiString m_hypersonicScenarioOutput;	///< Hypersonic @feature (D-049) folder for its screenshots and log
 
 	std::vector<AsciiString> m_simulateReplays; ///< If not empty, simulate this list of replays and exit.
 	Int m_simulateReplayJobs; ///< Maximum number of processes to use for simulation, or SIMULATE_REPLAYS_SEQUENTIAL for sequential simulation
@@ -579,6 +582,13 @@ public:
 	// the trailing '\' is included!
   const AsciiString &getPath_UserData() const { return m_userDataDir; }
 
+	// Hypersonic @feature (D-134) after loadMods: the CRC must hash the mod archive's skirmish scripts
+	void recomputeExeCRC() { m_exeCRC = generateExeCRC(); }
+
+	// Hypersonic @feature (D-146) vanilla Zero Hour's user-data folder (trailing '\' included; only read, for its
+	// custom maps), empty if the Documents folder is unknown.
+	const AsciiString &getPath_VanillaUserData() const { return m_vanillaUserDataDir; }
+
 private:
 
 	static UnsignedInt generateExeCRC();
@@ -588,6 +598,7 @@ private:
 	// this is private, since we read the info from Windows and cache it for
 	// future use. No one is allowed to change it, ever. (srj)
 	AsciiString m_userDataDir;
+	AsciiString m_vanillaUserDataDir;	// Hypersonic @feature (D-146)
 	AsciiString BuildUserDataPathFromRegistry();
 
 	static GlobalData *m_theOriginal;		///< the original global data instance (no overrides)

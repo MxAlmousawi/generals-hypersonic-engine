@@ -182,6 +182,7 @@ public:
 	virtual void preloadTextureAssets( AsciiString texture ) = 0;	///< preload texture asset
 
 	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality = DEFAULT_JPEG_QUALITY) = 0;			///< saves screenshot in specified format
+	virtual void takeScreenShotToFile(const char *pngPath) {}	///< Hypersonic @feature (D-049) saves a PNG screenshot now, synchronously
 	virtual void toggleMovieCapture() = 0;							///< starts saving frames to an avi or frame sequence
 	virtual void toggleLetterBox() = 0;										///< enabled letter-boxed display
 	virtual void enableLetterBox(Bool enable) = 0;						///< forces letter-boxed display on/off

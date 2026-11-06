@@ -32,6 +32,8 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
+#include "Common/SpecialPower.h"
+#include "GameLogic/Module/JetAIUpdate.h"
 #include "Common/Xfer.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/SpecialAbility.h"
@@ -66,7 +68,21 @@ void SpecialAbility::doSpecialPowerAtLocation( const Coord3D *loc, Real angle, U
 	if( loc == nullptr )
 		return;
 
+	// Hypersonic @feature (D-246 Update 6): positional mode on the existing jet.
+	if (getSpecialPowerTemplate()->getSpecialPowerType() == SPECIAL_IRAN_GAZA_GUARD)
+	{
+		JetAIUpdate* jet = getObject()->getAI() ? getObject()->getAI()->getJetAIUpdate() : nullptr;
+		if (jet && jet->supportsGazaGuard())
+			jet->setGazaGuardPosition(*loc);
+		return;
+	}
 	// call the base class action cause we are *EXTENDING* functionality
+	if (getSpecialPowerTemplate()->getSpecialPowerType() == SPECIAL_IRAN_ALMAS_STRIKE)
+	{
+		JetAIUpdate* jet = getObject()->getAI() ? getObject()->getAI()->getJetAIUpdate() : nullptr;
+		if (jet)
+			jet->prepareGazaGuardStrike(*loc);
+	}
 	SpecialPowerModule::doSpecialPowerAtLocation( loc, angle, commandOptions );
 }
 
@@ -81,6 +97,12 @@ void SpecialAbility::doSpecialPowerAtObject( Object *obj, UnsignedInt commandOpt
 		return;
 
 	// call the base class action cause we are *EXTENDING* functionality
+	if (getSpecialPowerTemplate()->getSpecialPowerType() == SPECIAL_IRAN_ALMAS_STRIKE)
+	{
+		JetAIUpdate* jet = getObject()->getAI() ? getObject()->getAI()->getJetAIUpdate() : nullptr;
+		if (jet)
+			jet->prepareGazaGuardStrike(*obj->getPosition());
+	}
 	SpecialPowerModule::doSpecialPowerAtObject( obj, commandOptions );
 }
 
@@ -92,6 +114,13 @@ void SpecialAbility::doSpecialPower( UnsignedInt commandOptions )
 	if (getObject()->isDisabled())
 		return;
 
+	if (getSpecialPowerTemplate()->getSpecialPowerType() == SPECIAL_IRAN_GAZA_RELEASE)
+	{
+		JetAIUpdate* jet = getObject()->getAI() ? getObject()->getAI()->getJetAIUpdate() : nullptr;
+		if (jet && jet->supportsGazaGuard())
+			jet->releaseGazaGuard();
+		return;
+	}
 	// call the base class action cause we are *EXTENDING* functionality
 	SpecialPowerModule::doSpecialPower( commandOptions );
 }

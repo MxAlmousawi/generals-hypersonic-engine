@@ -49,6 +49,7 @@
 #include "GameLogic/Module/ContainModule.h"
 #include "GameLogic/Module/StealthUpdate.h"
 #include "GameLogic/Module/SpawnBehavior.h"
+#include "GameLogic/Module/HitChanceBehavior.h"
 
 #include "GameLogic/Weapon.h"
 
@@ -394,6 +395,14 @@ static Int getVictimAntiMask(const Object* victim)
 	}
 	else if( victim->isKindOf( KINDOF_BALLISTIC_MISSILE ) )
 	{
+		// Hypersonic @feature A ballistic missile whose HitChanceBehavior says TargetableByAntiAir can also be engaged
+		// by every anti-air weapon, not only by AntiBallisticMissile ones (Generals Hypersonic IRAN_DESIGN 7c): any
+		// weapon that is anti airborne vehicle or anti airborne infantry (Comanche cannon, Helix minigun, ...).
+		const HitChanceBehavior *hitChance = HitChanceBehavior::findHitChanceBehavior( victim );
+		if( hitChance != nullptr && hitChance->isTargetableByAntiAir() )
+		{
+			return WEAPON_ANTI_BALLISTIC_MISSILE | WEAPON_ANTI_AIRBORNE_VEHICLE | WEAPON_ANTI_AIRBORNE_INFANTRY;
+		}
 		return WEAPON_ANTI_BALLISTIC_MISSILE;
 	}
 	else if( victim->isKindOf( KINDOF_PROJECTILE ) )
@@ -688,6 +697,23 @@ CanAttackResult WeaponSet::getAbleToUseWeaponAgainstTarget( AbleToAttackType att
 				withinAttackRange = weaponToTestForRange->isWithinAttackRange( source, pos );
 			if( withinAttackRange )
 			{
+				hasAWeaponInRange = TRUE;
+				break;
+			}
+		}
+	}
+
+	// Hypersonic @feature SAM early launch (D-038): against an Iranian missile the range test above (current weapon
+	// only) must also accept any SAM weapon of the set that has a reachable intercept point within its range.
+	if( !hasAWeaponInRange && victim != nullptr && WeaponTemplate::isLeadInterceptTarget( victim ) )
+	{
+		for( Int i = 0; i < WEAPONSLOT_COUNT; ++i )
+		{
+			const Weapon *weapon = m_weapons[ i ];
+			if( weapon != nullptr && weapon->getTemplate()->isLeadInterceptWeapon()
+					&& (weapon->getAntiMask() & targetAntiMask) != 0 && weapon->isWithinAttackRange( source, victim ) )
+			{
+				withinAttackRange = TRUE;
 				hasAWeaponInRange = TRUE;
 				break;
 			}

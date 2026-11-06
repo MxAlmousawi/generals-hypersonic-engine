@@ -201,6 +201,7 @@ public:
 	static ProductionUpdateInterface *getProductionUpdateInterfaceFromObject( Object *obj );
 
 	virtual CanMakeType canQueueCreateUnit( const ThingTemplate *unitType ) const override;
+	Bool hasMagazineRoomFor( const ThingTemplate *unitType ) const;	///< Hypersonic @feature (D-039)
 	virtual CanMakeType canQueueUpgrade( const UpgradeTemplate *upgrade ) const override;
 
 	/** this method is used to request a unique ID to assign to the production of a single

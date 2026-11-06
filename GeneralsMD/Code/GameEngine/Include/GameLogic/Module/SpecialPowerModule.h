@@ -71,6 +71,17 @@ public:
 
 	//If the special power launches a construction site, we need to know the final product for placement purposes.
 	virtual const ThingTemplate* getReferenceThingTemplate() const = 0;
+
+	// Hypersonic @feature Launch facilities (D-039): how many launches this source holds for the side-bar
+	// count (loaded munitions), or -1 for an ordinary power that counts as one when ready.
+	virtual Int getShortcutReadyCount() const { return -1; }
+
+	// Hypersonic @feature Launch facilities (D-040): FALSE when this source cannot fire at the location (a missile's
+	// minimum range); ActionManager shows the invalid cursor. Read-only, the client asks.
+	virtual Bool isValidTargetLocation( const Coord3D *loc ) const { return TRUE; }
+
+	// Hypersonic @feature Iran AI strike targeting (D-110): the munition this source launches, or nullptr.
+	virtual const ThingTemplate *getMunitionTemplate() const { return nullptr; }
 };
 
 //-------------------------------------------------------------------------------------------------
@@ -121,6 +132,7 @@ public:
 	void syncReadyFrameToStatusQuo();
 
 	virtual const SpecialPowerTemplate* getSpecialPowerTemplate() const override;
+	virtual Bool isValidTargetLocation( const Coord3D *loc ) const override;	///< Hypersonic @feature (D-163) MinimumRange
 	virtual ScienceType getRequiredScience() const override;
 
 	virtual void onSpecialPowerCreation() override;	// called by a create module to start our countdown

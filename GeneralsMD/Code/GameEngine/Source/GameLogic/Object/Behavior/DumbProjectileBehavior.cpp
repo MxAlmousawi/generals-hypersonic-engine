@@ -64,6 +64,7 @@ DumbProjectileBehaviorModuleData::DumbProjectileBehaviorModuleData() :
 	m_secondHeight(0.0f),
 	m_firstPercentIndent(0.0f),
 	m_secondPercentIndent(0.0f),
+	m_ballisticDrop(FALSE),
 	m_garrisonHitKillCount(0),
 	m_garrisonHitKillFX(nullptr),
 	m_flightPathAdjustDistPerFrame(0.0f)
@@ -86,6 +87,8 @@ void DumbProjectileBehaviorModuleData::buildFieldParse(MultiIniFieldParse& p)
 		{ "SecondHeight",					INI::parseReal,						nullptr, offsetof( DumbProjectileBehaviorModuleData, m_secondHeight ) },
 		{ "FirstPercentIndent",		INI::parsePercentToReal,	nullptr, offsetof( DumbProjectileBehaviorModuleData, m_firstPercentIndent ) },
 		{ "SecondPercentIndent",	INI::parsePercentToReal,	nullptr, offsetof( DumbProjectileBehaviorModuleData, m_secondPercentIndent ) },
+		// Hypersonic @feature (Generals Hypersonic D-062)
+		{ "BallisticDrop",				INI::parseBool,					nullptr, offsetof( DumbProjectileBehaviorModuleData, m_ballisticDrop ) },
 
 		{ "GarrisonHitKillRequiredKindOf", KindOfMaskType::parseFromINI, nullptr, offsetof( DumbProjectileBehaviorModuleData, m_garrisonHitKillKindof ) },
 		{ "GarrisonHitKillForbiddenKindOf", KindOfMaskType::parseFromINI, nullptr, offsetof( DumbProjectileBehaviorModuleData, m_garrisonHitKillKindofNot ) },
@@ -118,6 +121,9 @@ DumbProjectileBehavior::DumbProjectileBehavior( Thing *thing, const ModuleData* 
 	m_flightPathStart.zero();
 	m_flightPathEnd.zero();
 	m_currentFlightPathStep = 0;
+	m_ballisticStartVZ = 0.0f;
+	m_ballisticStartVX = 0.0f;
+	m_ballisticStartVY = 0.0f;
 	m_extraBonusFlags = 0;
 
   m_hasDetonated = FALSE;
@@ -398,10 +404,107 @@ void DumbProjectileBehavior::projectileFireAtObjectOrPosition( const Object *vic
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature split warhead (D-062): fly the launched path in exactly 'frames' frames instead of at the weapon
+// speed (a cluster weapon staggers its warheads' landings). The path points are recomputed for that many steps; the
+// speed is kept consistent (saved; a load rebuilds the path from the saved step count).
+//-------------------------------------------------------------------------------------------------
+void DumbProjectileBehavior::projectileSetFlightFrames(UnsignedInt frames)
+{
+	if (frames < 2 || m_flightPathSegments <= 0 || m_currentFlightPathStep != 0)
+		return;
+	const Real length = m_flightPathSpeed * (Real)m_flightPathSegments;
+	m_flightPathSegments = (Int)frames;
+	m_flightPathSpeed = length / (Real)frames;
+	if (!calcFlightPath(false))
+		TheGameLogic->destroyObject(getObject());
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature one-by-one release (D-162): a BallisticDrop path leaves with this vertical speed (dist/frame)
+// instead of level (the carrier's own motion); the path points are recomputed.
+//-------------------------------------------------------------------------------------------------
+void DumbProjectileBehavior::projectileSetStartVerticalSpeed(Real vz)
+{
+	m_ballisticStartVZ = vz;
+	if (m_flightPathSegments > 0 && m_currentFlightPathStep == 0 && getDumbProjectileBehaviorModuleData()->m_ballisticDrop)
+	{
+		if (!calcFlightPath(false))
+			TheGameLogic->destroyObject(getObject());
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature cone release (D-267): a BallisticDrop path leaves with this horizontal speed (dist/frame); the path
+// points are recomputed. Same end point, same flight time.
+//-------------------------------------------------------------------------------------------------
+void DumbProjectileBehavior::projectileSetStartHorizontalSpeed(Real vx, Real vy)
+{
+	m_ballisticStartVX = vx;
+	m_ballisticStartVY = vy;
+	if (m_flightPathSegments > 0 && m_currentFlightPathStep == 0 && getDumbProjectileBehaviorModuleData()->m_ballisticDrop)
+	{
+		if (!calcFlightPath(false))
+			TheGameLogic->destroyObject(getObject());
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
 Bool DumbProjectileBehavior::calcFlightPath(Bool recalcNumSegments)
 {
 	const DumbProjectileBehaviorModuleData* d = getDumbProjectileBehaviorModuleData();
+
+	// Hypersonic @feature ballistic drop (D-062): the path of a body thrown level from the start that lands on the end:
+	// horizontal progress even per frame, the height falling with the square of the time (level at the start, steepest at
+	// the end). At the weapon speed the horizontal speed is the flight speed; projectileSetFlightFrames may retime it.
+	if (d->m_ballisticDrop)
+	{
+		const Coord3D& a = m_flightPathStart;
+		const Coord3D& b = m_flightPathEnd;
+		if (recalcNumSegments)
+		{
+			const Real horizontal = sqrtf(sqr(b.x - a.x) + sqr(b.y - a.y));
+			m_flightPathSegments = max(2, (Int)ceil(horizontal / m_flightPathSpeed) + 1);
+		}
+		if (m_flightPathSegments < 2)
+			return false;
+		m_flightPath.resize(m_flightPathSegments);
+		// D-162: a start vertical speed vz gives the start slope dz/du = vz x (segments - 1); the height then follows
+		// a.z + s0 u + (dz - s0) u^2. A start falling faster than the straight line to the end would curve upward: then
+		// the straight line (no thrust may pull the warhead out of its dive). vz 0 = level start (D-062).
+		const Real dz = b.z - a.z;
+		Real s0 = m_ballisticStartVZ * (Real)(m_flightPathSegments - 1);
+		if (s0 < dz)
+			s0 = dz;
+		// D-267: the same shape sideways: a start speed gives the start slope, the rest eases to the end point. It may not
+		// carry the warhead past its end point: at most 1.5x the straight line along it (the end slope stays forward).
+		const Real dx = b.x - a.x;
+		const Real dy = b.y - a.y;
+		const Real frames = (Real)(m_flightPathSegments - 1);
+		Real sx = (m_ballisticStartVX != 0.0f || m_ballisticStartVY != 0.0f) ? m_ballisticStartVX * frames : dx;
+		Real sy = (m_ballisticStartVX != 0.0f || m_ballisticStartVY != 0.0f) ? m_ballisticStartVY * frames : dy;
+		const Real dist = sqrtf(sqr(dx) + sqr(dy));
+		const Real along = (dist > 0.01f) ? (sx * dx + sy * dy) / dist : 0.0f;
+		if (dist <= 0.01f)
+		{
+			sx = 0.0f;
+			sy = 0.0f;
+		}
+		else if (along > 1.5f * dist)
+		{
+			const Real cut = 1.5f * dist / along;
+			sx *= cut;
+			sy *= cut;
+		}
+		for (Int i = 0; i < m_flightPathSegments; ++i)
+		{
+			const Real u = (Real)i / (Real)(m_flightPathSegments - 1);
+			m_flightPath[i].x = a.x + sx * u + (dx - sx) * u * u;
+			m_flightPath[i].y = a.y + sy * u + (dy - sy) * u * u;
+			m_flightPath[i].z = a.z + s0 * u + (dz - s0) * u * u;
+		}
+		return true;
+	}
 
 	Coord3D controlPoints[4];
 	//First point is us, last point is them
@@ -749,17 +852,18 @@ void DumbProjectileBehavior::crc( Xfer *xfer )
 	* Version Info:
 	* 1: Initial version
 	* 2: TheSuperHackers @bugfix Added m_currentFlightPathStep for mid-flight save/load.
+	* 3: Hypersonic @feature m_ballisticStartVZ (D-162)
+	* 4: Hypersonic @feature m_ballisticStartVX/VY (D-267)
 	*/
 // ------------------------------------------------------------------------------------------------
 void DumbProjectileBehavior::xfer( Xfer *xfer )
 {
 
 	// version
-#if RETAIL_COMPATIBLE_XFER_SAVE
-	XferVersion currentVersion = 1;
-#else
-	XferVersion currentVersion = 2;
-#endif
+	// Hypersonic @bugfix (D-246, Codex review): always version 3. Under RETAIL_COMPATIBLE_XFER_SAVE (our VC6 build) stock
+	// saved version 1, which drops the flight-path step and the D-162 start speed: a bomb, Almas or missile warhead
+	// in flight restarted its path after a load. A Hypersonic save never loads in the retail game anyway.
+	XferVersion currentVersion = 4;
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -813,6 +917,15 @@ void DumbProjectileBehavior::xfer( Xfer *xfer )
 	if( version >= 2 )
 	{
 		xfer->xferInt( &m_currentFlightPathStep );
+	}
+
+	if( version >= 3 )
+		xfer->xferReal( &m_ballisticStartVZ );
+
+	if( version >= 4 )
+	{
+		xfer->xferReal( &m_ballisticStartVX );
+		xfer->xferReal( &m_ballisticStartVY );
 	}
 
 }

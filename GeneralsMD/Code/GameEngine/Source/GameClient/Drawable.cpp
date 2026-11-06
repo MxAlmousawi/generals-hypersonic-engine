@@ -1493,6 +1493,34 @@ void Drawable::calcPhysicsXformThrust( const Locomotor *locomotor, PhysicsXformI
 
 	}
 
+	// Hypersonic @feature banked turns (Generals Hypersonic D-152): a THRUST locomotor with LateralAccelerationRollFactor
+	// banks into its turns (the FPV quadcopter tilts toward the side it turns to): the roll follows factor x the sideways
+	// acceleration of the last logic frame (left turn = left side down), at most 30 degrees, eased by RollStiffness
+	// (share of the gap closed per update). Drawing only; the logic is unchanged. Stock THRUST locomotors leave the factor 0.
+	const Real LATERAL_ACCEL_COEFF = locomotor->getLateralAccelCoef();
+	if( LATERAL_ACCEL_COEFF != 0.0f )
+	{
+		const Object *obj = getObject();
+		const PhysicsBehavior *physics = obj ? obj->getPhysics() : nullptr;
+		if( physics != nullptr )
+		{
+			const Real MAX_THRUST_BANK = PI / 6.0f;
+			const Coord3D *dir = getUnitDirectionVector2D();
+			const Coord3D *accel = physics->getAcceleration();
+			Real lateralAccel = -dir->y * accel->x + dir->x * accel->y;
+			Real wanted = LATERAL_ACCEL_COEFF * lateralAccel;
+			if( wanted > MAX_THRUST_BANK )
+				wanted = MAX_THRUST_BANK;
+			else if( wanted < -MAX_THRUST_BANK )
+				wanted = -MAX_THRUST_BANK;
+			Real ease = locomotor->getRollStiffness();
+			if( ease <= 0.0f || ease > 1.0f )
+				ease = 1.0f;
+			m_locoInfo->m_accelerationRoll += ( wanted - m_locoInfo->m_accelerationRoll ) * ease;
+			info.m_totalRoll = ( THRUST_ROLL ? m_locoInfo->m_roll : 0.0f ) + m_locoInfo->m_accelerationRoll;
+		}
+	}
+
 }
 
 //-------------------------------------------------------------------------------------------------

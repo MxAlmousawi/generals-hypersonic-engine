@@ -297,6 +297,13 @@ static PoolSizeRec PoolSizes[] =
 	{ "W3DDependencyModelDraw", 64, 64 },
 	{ "W3DLaserDraw", 32, 32 },
 	{ "W3DModelDraw", 2048, 512 },
+	// Hypersonic: every memory-pooled class needs an entry, or the pool starts empty and cannot grow
+	{ "W3DLaunchRackDraw", 32, 32 },
+	{ "HitChanceBehavior", 256, 64 },
+	{ "CruiseFlightUpdate", 64, 32 },
+	{ "MunitionMagazineUpdate", 32, 32 },
+	{ "MunitionLaunchPower", 64, 32 },
+	{ "MissileLaunchSiteUpdate", 32, 32 },
 	{ "W3DOverlordTankDraw", 64, 64 },
 	{ "W3DOverlordTruckDraw", 64, 64 },
 	{ "W3DOverlordAircraftDraw", 64, 64 },

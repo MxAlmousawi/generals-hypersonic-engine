@@ -20,6 +20,7 @@
 
 #ifdef RTS_ENABLE_CRASHDUMP
 #include "Common/MiniDumper.h"
+#include "Common/HangWatch.h"	// Hypersonic @feature (D-274)
 #include <wctype.h>
 #include "gitinfo.h"
 
@@ -49,6 +50,9 @@ void MiniDumper::initMiniDumper(const AsciiString& userDirPath)
 
 void MiniDumper::shutdownMiniDumper()
 {
+	// Hypersonic @feature (D-274) A normal exit has already stopped the watchdog, so reaching this with it running means a crash.
+	HangWatch::shutdown("crash");
+
 	if (TheMiniDumper)
 	{
 		TheMiniDumper->ShutDown();
@@ -120,6 +124,8 @@ void MiniDumper::TriggerMiniDumpForException(_EXCEPTION_POINTERS* e_info, DumpTy
 		DEBUG_LOG(("MiniDumper::TriggerMiniDumpForException: Attempted to use an uninitialized instance."));
 		return;
 	}
+
+	HangWatch::noteCrash();	// Hypersonic @feature (D-274) no new hang report during a crash
 
 	g_dumpException = e_info;
 	g_dumpExceptionThreadId = ::GetCurrentThreadId();

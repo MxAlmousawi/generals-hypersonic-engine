@@ -75,6 +75,34 @@ void W3DGadgetPushButtonImageDrawOne(GameWindow *window, WinInstanceData *instDa
 
 // PRIVATE FUNCTIONS //////////////////////////////////////////////////////////
 
+// Hypersonic @feature upgrade badge (Generals Hypersonic D-099)
+// Draws the button's badge image (GadgetButtonDrawBadgeImage; the control bar sets it on upgrade
+// command buttons) over the top-right corner of the button rectangle x,y,w,h: a quarter of the
+// button width, the image's own aspect, inset by 1/40 of the width, so it scales with the
+// resolution. colorMultiplier/drawMode are the button image's, so a greyed button greys the badge.
+static void drawBadgeImage( const PushButtonData *pData, Int x, Int y, Int w, Int h,
+														Int colorMultiplier = 0xffffffff,
+														Display::DrawImageMode drawMode = Display::DRAW_IMAGE_ALPHA )
+{
+	if( pData == nullptr || pData->badgeImage == nullptr || w <= 0 || h <= 0 )
+		return;
+	const Image *badge = pData->badgeImage;
+	Int bw = w / 4;
+	if( bw < 6 )
+		bw = 6;
+	Int bh = bw;
+	if( badge->getImageWidth() > 0 )
+		bh = ( bw * badge->getImageHeight() + badge->getImageWidth() / 2 ) / badge->getImageWidth();
+	if( bh > h / 2 )
+		bh = h / 2;
+	Int inset = w / 40;
+	if( inset < 1 )
+		inset = 1;
+	Int bx = x + w - bw - inset;
+	Int by = y + inset;
+	TheDisplay->drawImage( badge, bx, by, bx + bw, by + bh, colorMultiplier, drawMode );
+}
+
 // drawButtonText =============================================================
 /** Draw button text to the screen */
 //=============================================================================
@@ -315,6 +343,9 @@ void W3DGadgetPushButtonImageDrawOne( GameWindow *window,
 {
 	const Image *image = nullptr;
 	ICoord2D size, start, end;
+	// Hypersonic @feature upgrade badge (Generals Hypersonic D-099): kept for the badge
+	Display::DrawImageMode	drawMode=Display::DRAW_IMAGE_ALPHA;
+	Int colorMultiplier = 0xffffffff;
 
 	//
 	// get pointer to image we want to draw depending on our state,
@@ -369,9 +400,6 @@ void W3DGadgetPushButtonImageDrawOne( GameWindow *window,
 		// find end point
 		end.x = start.x + size.x;
 		end.y = start.y + size.y;
-
-		Display::DrawImageMode	drawMode=Display::DRAW_IMAGE_ALPHA;
-		Int colorMultiplier = 0xffffffff;
 
 		if(BitIsSet( window->winGetStatus(), WIN_STATUS_USE_OVERLAY_STATES ) )
 		{
@@ -440,6 +468,9 @@ void W3DGadgetPushButtonImageDrawOne( GameWindow *window,
 			TheDisplay->drawOpenRect(start.x - 1, start.y - 1, size.x + 2, size.y + 2, 1, pData->colorBorder);
 
 		}
+
+		// Hypersonic @feature upgrade badge (Generals Hypersonic D-099)
+		drawBadgeImage( pData, start.x, start.y, size.x, size.y, colorMultiplier, drawMode );
 	}
 
 	//Now render overlays that pertain to the correct state.
@@ -697,5 +728,8 @@ void W3DGadgetPushButtonImageDrawThree(GameWindow *window, WinInstanceData *inst
 		{
 			TheDisplay->drawOpenRect(start.x - 1, start.y - 1, size.x + 2, size.y + 2, 1, pData->colorBorder);
 		}
+
+		// Hypersonic @feature upgrade badge (Generals Hypersonic D-099)
+		drawBadgeImage( pData, start.x, start.y, size.x, size.y );
 	}
 }

@@ -41,7 +41,9 @@
 #include "GameClient/Display.h"
 #include "GameClient/LookAtXlat.h"
 #include "GameClient/Mouse.h"
+#include "GameClient/View.h"	// Hypersonic @feature (D-223) TheTacticalView
 
+#include "GameLogic/GameLogic.h"	// Hypersonic @fix (D-223) isInShellGame
 #include "GameLogic/ScriptEngine.h"
 
 #include "GameNetwork/IPEnumeration.h"
@@ -884,6 +886,93 @@ Bool OptionPreferences::getShowMoneyPerMinute() const
 		return TRUE;
 	}
 	return FALSE;
+}
+
+// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223; D-258: every 50 from 350 to 850, for Ctrl + wheel)
+static const Real s_cameraZoomOutChoices[] = { 310.0f, 350.0f, 400.0f, 450.0f, 500.0f, 550.0f, 600.0f, 650.0f, 700.0f,
+	750.0f, 800.0f, 850.0f };
+enum { CAMERA_ZOOM_OUT_CHOICES = sizeof( s_cameraZoomOutChoices ) / sizeof( s_cameraZoomOutChoices[0] ), CAMERA_ZOOM_OUT_DEFAULT = 5 };
+
+Int OptionPreferences::getCameraZoomOutChoiceCount()
+{
+	return CAMERA_ZOOM_OUT_CHOICES;
+}
+
+Real OptionPreferences::getCameraZoomOutChoice( Int index )
+{
+	if( index < 0 || index >= CAMERA_ZOOM_OUT_CHOICES )
+		index = CAMERA_ZOOM_OUT_DEFAULT;
+	return s_cameraZoomOutChoices[ index ];
+}
+
+Int OptionPreferences::getCameraZoomOutDefaultIndex()
+{
+	return CAMERA_ZOOM_OUT_DEFAULT;
+}
+
+Int OptionPreferences::findCameraZoomOutIndex( Real height )
+{
+	Int best = CAMERA_ZOOM_OUT_DEFAULT;
+	Real bestDiff = -1.0f;
+	for( Int i = 0; i < CAMERA_ZOOM_OUT_CHOICES; ++i )
+	{
+		const Real diff = fabs( s_cameraZoomOutChoices[ i ] - height );
+		if( bestDiff < 0.0f || diff < bestDiff )
+		{
+			best = i;
+			bestDiff = diff;
+		}
+	}
+	return best;
+}
+
+Real OptionPreferences::getCameraZoomOut() const
+{
+	OptionPreferences::const_iterator it = find("CameraZoomOut");
+	if (it == end())
+		return 0.0f;
+	const Real height = (Real)atof(it->second.str());
+	if (height <= 0.0f)
+		return 0.0f;
+	return s_cameraZoomOutChoices[ findCameraZoomOutIndex( height ) ];	// only the listed choices
+}
+
+void OptionPreferences::applyCameraZoomOut( Real height )
+{
+	if( height <= 0.0f || TheWritableGlobalData == nullptr )
+		return;
+	// Hypersonic @fix (D-223): the main-menu shell map keeps GameData's height (its scripted camera tour was made for
+	// it; at 850 it flew above the terrain draw window: torn, black terrain); the choice applies when a game starts
+	if( TheGameLogic != nullptr && TheGameLogic->isInShellGame() )
+		return;
+	const Real oldMax = TheGlobalData->m_maxCameraHeight;
+	if( height == oldMax )
+		return;
+	TheWritableGlobalData->m_maxCameraHeight = height;
+	if( TheTacticalView != nullptr )
+		TheTacticalView->applyMaxCameraHeightChange( oldMax, height );
+}
+
+// Hypersonic @feature (Generals Hypersonic D-258): Ctrl + mouse wheel steps through the choices
+Real OptionPreferences::stepCameraZoomOut( Real height, Int steps )
+{
+	Int index = findCameraZoomOutIndex( height ) + steps;
+	if( index < 0 )
+		index = 0;
+	if( index >= CAMERA_ZOOM_OUT_CHOICES )
+		index = CAMERA_ZOOM_OUT_CHOICES - 1;
+	return s_cameraZoomOutChoices[ index ];
+}
+
+void OptionPreferences::saveCameraZoomOut( Real height )
+{
+	OptionPreferences pref;	// reads the player's current Options.ini, so other settings are kept
+	AsciiString value;
+	value.format( "%d", (Int)height );
+	if( pref["CameraZoomOut"] == value )
+		return;
+	pref["CameraZoomOut"] = value;
+	pref.write();
 }
 
 Real OptionPreferences::getGameWindowTransitionSpeedMultiplier() const

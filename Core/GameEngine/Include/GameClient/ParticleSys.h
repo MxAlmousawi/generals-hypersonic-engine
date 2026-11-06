@@ -621,6 +621,10 @@ public:
 	void setSizeMultiplier( Real value ) { m_sizeCoeff = value; }
 	Real getSizeMultiplier() { return m_sizeCoeff; }
 
+	/// Hypersonic @feature (Generals Hypersonic D-060) scale this system's geometry by 'scale': particle sizes and size
+	/// rates, emission volume, velocities, drift and gravity, and (by 'countScale') the burst count. Timing is unchanged.
+	void applyScale( Real scale, Real countScale );
+
 	/// Force a burst of particles to be emitted immediately.
 	void trigger () { m_burstDelayLeft = 0; m_delayLeft = 0;}
 

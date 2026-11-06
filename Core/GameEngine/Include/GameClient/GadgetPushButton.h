@@ -77,6 +77,8 @@ void GadgetButtonSetText( GameWindow *g, UnicodeString text );
 void GadgetButtonDrawClock( GameWindow *g, Int percent, Color color ); //Darkens the progress
 void GadgetButtonDrawInverseClock( GameWindow *g, Int percent, Color color ); //Darkens the remaining portion.
 void GadgetButtonDrawOverlayImage( GameWindow *g, const Image *image );
+// Hypersonic @feature upgrade badge (Generals Hypersonic D-099)
+void GadgetButtonDrawBadgeImage( GameWindow *g, const Image *image );	///< small badge over the top-right corner, null = none
 void GadgetButtonSetBorder( GameWindow *g, Color color, Bool drawBorder = TRUE );
 void GadgetButtonSetData(GameWindow *g, void *data);
 void *GadgetButtonGetData(GameWindow *g);

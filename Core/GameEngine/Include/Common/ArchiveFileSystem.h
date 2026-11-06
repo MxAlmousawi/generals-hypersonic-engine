@@ -148,6 +148,10 @@ public:
 
 	void loadMods();
 
+	// Hypersonic @feature (D-134) TRUE when the first archive providing this file is a -mod archive: such a file
+	// beats a loose file of the game folder (FileSystem::openFile), so the mod copies nothing into the game folder.
+	Bool isFileInModArchive(const Char *filename) const;
+
 	ArchivedDirectoryInfo* friend_getArchivedDirectoryInfo(const Char* directory);
 
 protected:
@@ -166,6 +170,7 @@ protected:
 
 	ArchiveFileMap m_archiveFileMap;
 	ArchivedDirectoryInfo m_rootDirectory;
+	std::vector<ArchiveFile*> m_modArchives;	///< Hypersonic @feature (D-134) the archives loaded by loadMods
 };
 
 

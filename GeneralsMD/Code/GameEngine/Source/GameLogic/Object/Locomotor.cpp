@@ -661,6 +661,7 @@ Locomotor::Locomotor(const LocomotorTemplate* tmpl)
 	m_maxAccel = BIGNUM;
 	m_maxBraking = BIGNUM;
 	m_maxTurnRate = BIGNUM;
+	m_turnRateBoost = 1.0f;
 	m_flags = 0;
 	m_closeEnoughDist = m_template->m_closeEnoughDist;
 	setFlag(IS_CLOSE_ENOUGH_DIST_3D, m_template->m_isCloseEnoughDist3D);
@@ -688,6 +689,7 @@ Locomotor::Locomotor(const Locomotor& that)
 	m_maxAccel = that.m_maxAccel;
 	m_maxBraking = that.m_maxBraking;
 	m_maxTurnRate = that.m_maxTurnRate;
+	m_turnRateBoost = that.m_turnRateBoost;
 	m_flags = that.m_flags;
 	m_closeEnoughDist = that.m_closeEnoughDist;
 #ifdef CIRCLE_FOR_LANDING
@@ -711,6 +713,7 @@ Locomotor& Locomotor::operator=(const Locomotor& that)
 		m_maxAccel = that.m_maxAccel;
 		m_maxBraking = that.m_maxBraking;
 		m_maxTurnRate = that.m_maxTurnRate;
+		m_turnRateBoost = that.m_turnRateBoost;
 		m_flags = that.m_flags;
 		m_closeEnoughDist = that.m_closeEnoughDist;
 #ifdef CIRCLE_FOR_LANDING
@@ -813,6 +816,8 @@ Real Locomotor::getMaxTurnRate(BodyDamageType condition) const
 
 	if (turn > m_maxTurnRate)
 		turn = m_maxTurnRate;
+
+	turn *= m_turnRateBoost;	// Hypersonic @feature terminal steering (D-228)
 
 	const Real TURN_FACTOR = 2;
 	if (getFlag(ULTRA_ACCURATE))

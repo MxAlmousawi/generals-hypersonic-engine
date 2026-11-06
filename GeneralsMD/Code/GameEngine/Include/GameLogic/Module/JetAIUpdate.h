@@ -62,6 +62,9 @@ public:
 	Real										m_lockonAngleSpin;								///< how many times to spin around it
 	Real										m_lockonBlinky;
 	UnsignedInt							m_returnToBaseIdleTime;						///< if we're idle for this long, return to base
+	Int m_returnToBaseWeaponSlot; ///< Hypersonic D-246: optional ammo-return slot; WEAPONSLOT_COUNT keeps stock all-weapons rule.
+	Bool m_gazaGuardMode; ///< Hypersonic @feature (D-246 Update 6), opt-in only.
+	Bool										m_returnWhenVictimDies;						///< Hypersonic @feature (D-039) if f, a runway jet whose victim dies stays idle where it is
 
 	JetAIUpdateModuleData();
 	static void buildFieldParse(MultiIniFieldParse& p);
@@ -93,6 +96,13 @@ public:
 	virtual Bool isIdle() const override;
 	virtual Bool isTaxiingToParking() const override; //only applies to jets interacting with runways.
 	virtual Bool isReloading() const;
+	Bool supportsGazaGuard() const { return getJetAIUpdateModuleData()->m_gazaGuardMode; }
+	Bool isGazaGuarding() const { return m_gazaGuarding; }
+	void setGazaGuardPosition(const Coord3D& pos);
+	void releaseGazaGuard();
+	Bool canReachFromGazaGuard(const Coord3D& pos, WeaponSlotType slot) const;
+	void prepareGazaGuardStrike(const Coord3D& pos);
+	void approachGazaGuardStrike(const Coord3D& pos);
 
 	virtual Bool isAllowedToMoveAwayFromUnit() const override;
 	virtual Bool getSneakyTargetingOffset(Coord3D* offset) const override;
@@ -126,6 +136,7 @@ public:
 	void friend_addWaypointToGoalPath( const Coord3D &pos );
 	AICommandType friend_getPendingCommandType() const;
 	void friend_purgePendingCommand();
+	Bool friend_getPendingCommandTarget( Coord3D *pos ) const;	///< Hypersonic @feature (D-039) where a pending attack/move order points
 
 protected:
 
@@ -170,6 +181,18 @@ private:
 	Coord3D									m_landingPosForHelipadStuff;
 	Bool										m_enginesOn;					///<
 
+	// Hypersonic @feature (D-246 Update 6): same object/producer/parking reservation.
+	Bool m_gazaGuarding;
+	Bool m_gazaReturning;
+	Bool m_gazaHasReturnPosition;
+	Coord3D m_gazaGuardPosition;
+	Coord3D m_gazaReturnPosition;
+	ObjectID m_gazaGuardTarget;
+	UnsignedInt m_gazaNextGuardScan;
+	void doJetCommand(const AICommandParms* parms);
+	void rememberGazaReturnPosition(const AICommandParms* parms);
+	void updateGazaGuard();
+	void refreshGazaCommandSet();
 	void getProducerLocation();
 	void buildLockonDrawableIfNecessary();
 	void doLandingCommand(Object *airfield, CommandSourceType cmdSource);

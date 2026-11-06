@@ -34,6 +34,7 @@
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
 #include "Common/Player.h"
+#include "GameLogic/HypersonicScenario.h"	// Hypersonic @feature (D-189 optional units)
 #include "Common/SpecialPower.h"
 #include "Common/Team.h"
 #include "Common/ThingFactory.h"
@@ -991,10 +992,26 @@ Bool AIPlayer::isSupplySourceAttacked()
 //-------------------------------------------------------------------------------------------------
 /** Is the nearest supply source safe? */
 //-------------------------------------------------------------------------------------------------
+static Bool isHypersonicIranAI( const Player *player );	// below
+
 Bool AIPlayer::isSupplySourceSafe( Int minSupplies )
 {
 	Object *warehouse = findSupplyCenter(minSupplies);
-	if (warehouse==nullptr) return true; // it's safe cause it doesn't exist.
+	if( TheHypersonicScenario != nullptr && isHypersonicIranAI( m_player ) )	// Hypersonic (2026-10-20) harness log: expansion
+	{
+		if( warehouse == nullptr )
+			TheHypersonicScenario->noteAI( "AI EXPAND %s supply source safe: no free supply source (min %d)",
+				TheHypersonicScenario->sideLabel( m_player ), minSupplies );
+		else
+			TheHypersonicScenario->noteAI( "AI EXPAND %s supply source at %.0f %.0f: %s", TheHypersonicScenario->sideLabel( m_player ),
+				warehouse->getPosition()->x, warehouse->getPosition()->y,
+				isLocationSafe( warehouse->getPosition(), warehouse->getTemplate() ) ? "safe" : "NOT safe (enemy near)" );
+	}
+	if (warehouse==nullptr) {
+		// Hypersonic (2026-10-20): for Iran no free safe source means no expansion now; stock: "safe", and the
+		// expansion script then spends its order and its 240 s cooldown on nothing.
+		return !isHypersonicIranAI( m_player );
+	}
 	return (isLocationSafe(warehouse->getPosition(), warehouse->getTemplate()));
 }
 
@@ -1150,10 +1167,24 @@ void AIPlayer::onUnitProduced( Object *factory, Object *unit )
 }
 
 //----------------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-172) TRUE when pos is closer (2D) than the minimum range (plus a small margin, so
+// rounding never lands just inside) to the firing source. No source or no range: never too close.
+static const Real SUPERWEAPON_MIN_RANGE_MARGIN = 10.0f;
+static Bool isInsideSuperweaponMinRange(const Coord3D *pos, const Coord3D *minRangeFrom, Real minRange)
+{
+	if (minRangeFrom == nullptr || minRange <= 0.0f)
+		return FALSE;
+	const Real dx = pos->x - minRangeFrom->x;
+	const Real dy = pos->y - minRangeFrom->y;
+	const Real limit = minRange + SUPERWEAPON_MIN_RANGE_MARGIN;
+	return dx*dx + dy*dy < limit*limit;
+}
+
+//----------------------------------------------------------------------------------------------------------
 /**
  * Find a good spot to fire a superweapon.
  */
-Bool AIPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *retPos, Int playerNdx, Real weaponRadius)
+Bool AIPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *retPos, Int playerNdx, Real weaponRadius, const Coord3D *minRangeFrom, Real minRange)
 {
 
   Bool success = FALSE;
@@ -1246,6 +1277,9 @@ Bool AIPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord
 			pos.x = bounds.lo.x + ( bounds.width() * xIndex ) / xCount;
 			pos.y = bounds.lo.y + ( bounds.height() * yIndex ) / yCount;
 			pos.z = 0;
+			// Hypersonic @feature (D-172) skip spots inside the power's MinimumRange
+			if (isInsideSuperweaponMinRange(&pos, minRangeFrom, minRange))
+				continue;
 			Int curCash = getPlayerSuperweaponValue( &pos, playerNdx, 2*weaponRadius, targetMilitaryUnits );
 			if ( curCash > cash)
 			{
@@ -1261,6 +1295,7 @@ Bool AIPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord
 
 	//Fine tune that position by looking at a even smaller radius.
 	Coord3D veryBestPos;
+	Coord3D firstBestPos; // Hypersonic @feature (D-172) fallback when the averaged spot lands inside MinimumRange
 	xCount = 11;
 	yCount = 11;
 	cash = -1;
@@ -1272,11 +1307,15 @@ Bool AIPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord
 			pos.x = bestPos.x + (x-5)*(weaponRadius/10);
 			pos.y = bestPos.y + (x-5)*(weaponRadius/10);
 			pos.z = 0;
+			// Hypersonic @feature (D-172) skip spots inside the power's MinimumRange
+			if (isInsideSuperweaponMinRange(&pos, minRangeFrom, minRange))
+				continue;
 			Int curCash = getPlayerSuperweaponValue( &pos, playerNdx, weaponRadius, targetMilitaryUnits );
 			if ( curCash > cash)
 			{
 				cash = curCash;
 				veryBestPos = pos;
+				firstBestPos = pos;
 				count = 1;
 			}
 			else if (curCash==cash)
@@ -1291,10 +1330,16 @@ Bool AIPlayer::computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord
 		veryBestPos.x /= count;
 		veryBestPos.y /= count;
 	}
+	// Hypersonic @feature (D-172) averaging equal-valued spots may pull the result back inside MinimumRange
+	if (cash > -1 && isInsideSuperweaponMinRange(&veryBestPos, minRangeFrom, minRange))
+		veryBestPos = firstBestPos;
 	veryBestPos.z = TheTerrainLogic->getGroundHeight(veryBestPos.x, veryBestPos.y);
 	*retPos = veryBestPos;
 
   success = ( cash > -1 );
+	// Hypersonic @feature (D-172) with a MinimumRange, an empty legal spot is not worth the power: hold
+	if (minRangeFrom != nullptr && minRange > 0.0f && cash <= 0)
+		success = FALSE;
 
 
   return success;
@@ -1464,6 +1509,16 @@ Object *AIPlayer::findFactory(const ThingTemplate *thing, Bool busyOK)
 // ------------------------------------------------------------------------------------------------
 /** Return true if team can be considered for building */
 // ------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-189 optional units, D-190) the Iran AI: a team unit with minimum 0 whose factory or tech is
+// missing (Zolfaghar, Bavar-373 and Kaveh before the Aerospace Command) is skipped instead of holding the whole team,
+// so "optional" means optional (stock: any listed type without a factory stops the team from being built)
+static Bool isHypersonicIranAI( const Player *player )
+{
+	if( TheHypersonicScenario != nullptr && TheHypersonicScenario->isStockTeamUnits() )
+		return FALSE;	// harness comparison runs (IranTeamUnits = Stock)
+	return player != nullptr && player->getPlayerType() == PLAYER_COMPUTER && player->getSide() == "Iran";
+}
+
 Bool AIPlayer::isPossibleToBuildTeam( TeamPrototype *proto, Bool requireIdleFactory, Bool &notEnoughMoney)
 {
 	/* Make sure we have at least one idle factory, and factories for all unit types. */
@@ -1477,6 +1532,8 @@ Bool AIPlayer::isPossibleToBuildTeam( TeamPrototype *proto, Bool requireIdleFact
 		if (thing) {
 			Int thingCost = thing->calcCostToBuild(m_player);
 			if (nullptr == findFactory(thing, true)) {
+				if (unitInfo[i].minUnits <= 0 && isHypersonicIranAI(m_player))
+					continue;	// Hypersonic @feature (D-189 optional units) an optional unit we cannot make yet
 				// Couldn't find a factory.
 				return false;
 			}
@@ -1608,6 +1665,9 @@ Bool AIPlayer::selectTeamToReinforce( Int minPriority )
 		prependTo_TeamBuildQueue(teamQ);
 		teamQ->m_priorityBuild = false;
 		teamQ->m_reinforcement = true;
+		if( TheHypersonicScenario != nullptr && isHypersonicIranAI( m_player ) )	// Hypersonic @feature (D-174) harness log
+			TheHypersonicScenario->noteAI( "AI BUILD reinforce %s +%s (pri %d, money %d)", curTeam->getPrototype()->getName().str(),
+				curThing->getName().str(), curPriority, (Int)m_player->getMoney()->countMoney() );
 
 		WorkOrder *order = newInstance(WorkOrder);
 		order->m_thing = curThing;
@@ -1667,8 +1727,29 @@ Bool AIPlayer::selectTeamToReinforce( Int minPriority )
 // ------------------------------------------------------------------------------------------------
 /** Determine the next team to build.  Return true if one was selected. */
 // ------------------------------------------------------------------------------------------------
+// Hypersonic (owner 2026-10-20, "we should limit the units a bit, it's almost always 100 more"): while an Iran computer
+// player has IRAN_ARMY_CAP or more ground combat units (infantry and vehicles; no dozers, supply trucks or aircraft),
+// it starts no new team below IRAN_ARMY_CAP_EXEMPT priority (the invasion alert and oil capture teams still come)
+static const Int IRAN_ARMY_CAP = 90;
+static const Int IRAN_ARMY_CAP_EXEMPT = 1000;
+
+static Int countIranArmy( Player *player )
+{
+	Int army = 0;
+	for( Object *obj = TheGameLogic->getFirstObject(); obj; obj = obj->getNextObject() )
+	{
+		if( obj->getControllingPlayer() != player || obj->isEffectivelyDead() || obj->isKindOf( KINDOF_STRUCTURE )
+			|| obj->isKindOf( KINDOF_AIRCRAFT ) || obj->isKindOf( KINDOF_DOZER ) || obj->isKindOf( KINDOF_HARVESTER ) )
+			continue;
+		if( obj->isKindOf( KINDOF_INFANTRY ) || obj->isKindOf( KINDOF_VEHICLE ) )
+			++army;
+	}
+	return army;
+}
+
 Bool AIPlayer::selectTeamToBuild()
 {
+	const Bool armyCapped = isHypersonicIranAI( m_player ) && countIranArmy( m_player ) >= IRAN_ARMY_CAP;	// Hypersonic
 
 	// find the highest priority of all teams
 	Player::PlayerTeamList::const_iterator t;
@@ -1680,8 +1761,10 @@ Bool AIPlayer::selectTeamToBuild()
 	{
 		if (isAGoodIdeaToBuildTeam(*t))
 		{
-			candidateList1.push_back( (*t) );
 			Int pri = (*t)->getTemplateInfo()->m_productionPriority;
+			if (armyCapped && pri < IRAN_ARMY_CAP_EXEMPT)
+				continue;	// Hypersonic: IRAN_ARMY_CAP
+			candidateList1.push_back( (*t) );
 
 			if (pri > hiPri)
 			{
@@ -1690,7 +1773,8 @@ Bool AIPlayer::selectTeamToBuild()
 		}
 	}
 
-	if (selectTeamToReinforce(hiPri)) {
+	// Hypersonic: at the IRAN_ARMY_CAP reinforcements also wait (only teams above an exempt candidate)
+	if ((!armyCapped || hiPri != invalidPri) && selectTeamToReinforce(hiPri)) {
 		return true;
 	}
 
@@ -1736,6 +1820,9 @@ Bool AIPlayer::selectTeamToBuild()
 			teamStr.concat("' has no Home Position (or Origin).");
 			TheScriptEngine->AppendDebugMessage(teamStr, false);
 		}
+		if( TheHypersonicScenario != nullptr && isHypersonicIranAI( m_player ) )	// Hypersonic @feature (D-174) harness log
+			TheHypersonicScenario->noteAI( "AI BUILD team %s (pri %d of %d candidates, money %d)", teamProto->getName().str(), hiPri,
+				count, (Int)m_player->getMoney()->countMoney() );
 		// Build it at low priority, as we have selected it automagically.
 		buildSpecificAITeam(teamProto, false);
 		m_readyToBuildTeam = false;
@@ -1986,7 +2073,13 @@ void AIPlayer::buildBySupplies(Int minimumCash, const AsciiString& thingName)
 		location.z = 0; // All build list locations are ground relative.
 		m_player->addToPriorityBuildList(thingName, &location, angle);
 		m_curWarehouseID = bestSupplyWarehouse->getID();
+		if( TheHypersonicScenario != nullptr && isHypersonicIranAI( m_player ) )	// Hypersonic (2026-10-20) harness log: expansion
+			TheHypersonicScenario->noteAI( "AI EXPAND %s order %s at %.0f %.0f (dock %.0f %.0f)", TheHypersonicScenario->sideLabel( m_player ),
+				thingName.str(), location.x, location.y, bestSupplyWarehouse->getPosition()->x, bestSupplyWarehouse->getPosition()->y );
 	}
+	else if( TheHypersonicScenario != nullptr && isHypersonicIranAI( m_player ) )	// Hypersonic (2026-10-20) harness log: expansion
+		TheHypersonicScenario->noteAI( "AI EXPAND %s order %s: no supply source (min %d)", TheHypersonicScenario->sideLabel( m_player ),
+			thingName.str(), minimumCash );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2234,9 +2327,15 @@ Object *AIPlayer::findSupplyCenter(Int minimumCash)
 				PartitionFilterAcceptByKindOf f1(MAKE_KINDOF_MASK(KINDOF_CASH_GENERATOR), KINDOFMASK_NONE);
 				PartitionFilterPlayer f2(m_player, true);	// Only find your own units.
 				PartitionFilterOnMap filterMapStatus;
+				// Hypersonic (2026-10-20, 3v3): Iran also leaves a pile alone when an ally's supply center serves it
+				// (it built its 2nd Supply Center at its allies' home piles).
+				PartitionFilterPlayerAffiliation f2Allies(m_player, ALLOW_ALLIES, true);
 
 
 				PartitionFilter *filters[] = { &f1, &f2, &filterMapStatus, nullptr };
+				if (isHypersonicIranAI(m_player)) {
+					filters[1] = &f2Allies;
+				}
 
 				Object *supplyCenter = ThePartitionManager->getClosestObject(&center, radius, FROM_BOUNDINGSPHERE_2D, filters);
 				if (supplyCenter) {
@@ -2256,6 +2355,12 @@ Object *AIPlayer::findSupplyCenter(Int minimumCash)
 						// closer than 60/40 to enemy than to us, probably not a good candidate for expansion.
 						continue;
 					}
+				}
+				// Hypersonic (owner 2026-10-20, 3v3 on Free Fire Zone: a pile just outside the base stayed unused): Iran
+				// skips sources with enemies near them and takes the nearest safe one. Stock picks the nearest source and
+				// then only asks whether it is safe, so one contested pile blocked every farther free one for good.
+				if (isHypersonicIranAI(m_player) && !isLocationSafe(obj->getPosition(), obj->getTemplate())) {
+					continue;
 				}
 
 				if (bestSupplyWarehouse==nullptr) {
@@ -2487,6 +2592,9 @@ void AIPlayer::buildSpecificAITeam( TeamPrototype *teamProto, Bool priorityBuild
 			if (thing)
 			{
 				int count = unitInfo[i].maxUnits-unitInfo[i].minUnits;
+				// Hypersonic @feature (D-189 optional units) no order for an optional unit the Iran AI cannot make now
+				if (count>0 && isHypersonicIranAI(m_player) && findFactory(thing, true) == nullptr)
+					count = 0;
 				if (count>0) {
 					WorkOrder *order = newInstance(WorkOrder);
 					order->m_thing = thing;
@@ -2723,6 +2831,11 @@ void AIPlayer::queueUnits()
 					break;
 				}
 			}
+			// Hypersonic @feature (D-189 optional units) the Iran AI: an optional unit whose factory or tech was lost
+			// while the team was building is dropped, so the team does not wait for it until its build time runs out
+			if (order->isWaitingToBuild() && !order->m_required && isHypersonicIranAI(m_player)
+				&& findFactory(order->m_thing, true) == nullptr)
+				order->m_numRequired = order->m_numCompleted;
 			if (order->isWaitingToBuild())
 			{
 

@@ -246,6 +246,8 @@ set(GAMEENGINE_SRC
     Include/GameLogic/FPUControl.h
     Include/GameLogic/GameLogic.h
     Include/GameLogic/GhostObject.h
+    Include/GameLogic/HypersonicCRCLog.h
+    Include/GameLogic/HypersonicScenario.h
     Include/GameLogic/Locomotor.h
     Include/GameLogic/LocomotorSet.h
 #    Include/GameLogic/LogicRandomValue.h
@@ -348,9 +350,14 @@ set(GAMEENGINE_SRC
     Include/GameLogic/Module/KeepObjectDie.h
     Include/GameLogic/Module/LaserUpdate.h
     Include/GameLogic/Module/LifetimeUpdate.h
+    Include/GameLogic/Module/CruiseFlightUpdate.h
+    Include/GameLogic/Module/MunitionLaunchPower.h
+    Include/GameLogic/Module/MunitionMagazineUpdate.h
+    Include/GameLogic/Module/MissileLaunchSiteUpdate.h
     Include/GameLogic/Module/LockWeaponCreate.h
     Include/GameLogic/Module/LocomotorSetUpgrade.h
     Include/GameLogic/Module/MaxHealthUpgrade.h
+    Include/GameLogic/Module/HitChanceBehavior.h
     Include/GameLogic/Module/MinefieldBehavior.h
     Include/GameLogic/Module/MissileAIUpdate.h
     Include/GameLogic/Module/MissileLauncherBuildingUpdate.h
@@ -653,6 +660,7 @@ set(GAMEENGINE_SRC
 #    Source/Common/System/Radar.cpp
 #    Source/Common/System/RAMFile.cpp
     Source/Common/System/registry.cpp
+    Source/Common/System/HangWatchGame.cpp
     Source/Common/System/SaveGame/GameState.cpp
     Source/Common/System/SaveGame/GameStateMap.cpp
 #    Source/Common/System/Snapshot.cpp
@@ -952,6 +960,7 @@ set(GAMEENGINE_SRC
     Source/GameLogic/Object/SimpleObjectIterator.cpp
     Source/GameLogic/Object/SpecialPower/BaikonurLaunchPower.cpp
     Source/GameLogic/Object/SpecialPower/CashBountyPower.cpp
+    Source/GameLogic/Object/SpecialPower/MunitionLaunchPower.cpp
     Source/GameLogic/Object/SpecialPower/CashHackSpecialPower.cpp
     Source/GameLogic/Object/SpecialPower/CleanupAreaPower.cpp
     Source/GameLogic/Object/SpecialPower/DefectorSpecialPower.cpp
@@ -1011,6 +1020,9 @@ set(GAMEENGINE_SRC
     Source/GameLogic/Object/Update/HordeUpdate.cpp
     Source/GameLogic/Object/Update/LaserUpdate.cpp
     Source/GameLogic/Object/Update/LifetimeUpdate.cpp
+    Source/GameLogic/Object/Update/CruiseFlightUpdate.cpp
+    Source/GameLogic/Object/Update/MunitionMagazineUpdate.cpp
+    Source/GameLogic/Object/Update/MissileLaunchSiteUpdate.cpp
     Source/GameLogic/Object/Update/MissileLauncherBuildingUpdate.cpp
     Source/GameLogic/Object/Update/MobMemberSlavedUpdate.cpp
     Source/GameLogic/Object/Update/NeutronMissileSlowDeathUpdate.cpp
@@ -1055,6 +1067,7 @@ set(GAMEENGINE_SRC
     Source/GameLogic/Object/Upgrade/GrantScienceUpgrade.cpp
     Source/GameLogic/Object/Upgrade/LocomotorSetUpgrade.cpp
     Source/GameLogic/Object/Upgrade/MaxHealthUpgrade.cpp
+    Source/GameLogic/Object/Behavior/HitChanceBehavior.cpp
     Source/GameLogic/Object/Upgrade/ModelConditionUpgrade.cpp
     Source/GameLogic/Object/Upgrade/ObjectCreationUpgrade.cpp
     Source/GameLogic/Object/Upgrade/PassengersFireUpgrade.cpp
@@ -1079,6 +1092,8 @@ set(GAMEENGINE_SRC
 #    Source/GameLogic/System/CrateSystem.cpp
 #    Source/GameLogic/System/Damage.cpp
     Source/GameLogic/System/GameLogic.cpp
+    Source/GameLogic/System/HypersonicCRCLog.cpp
+    Source/GameLogic/System/HypersonicScenario.cpp
 #    Source/GameLogic/System/GameLogicDispatch.cpp
 #    Source/GameLogic/System/RankInfo.cpp
 #    Source/GameNetwork/Connection.cpp

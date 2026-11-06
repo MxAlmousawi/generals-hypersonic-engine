@@ -239,7 +239,8 @@ UpdateSleepTime DeliverPayloadAIUpdate::update()
 void DeliverPayloadAIUpdate::deliverPayload(
 	const Coord3D *moveToPos,
 	const Coord3D *targetPos,
-	const DeliverPayloadData *data
+	const DeliverPayloadData *data,
+	const Coord3D *decalPos
 )
 {
 
@@ -255,7 +256,9 @@ void DeliverPayloadAIUpdate::deliverPayload(
 	m_data			= *data;
 
 	m_deliveryDecal.clear();
-	m_data.m_deliveryDecalTemplate.createRadiusDecal(*targetPos,
+	// Hypersonic @feature (Generals Hypersonic D-221): a fixed spread pattern draws its decal at the clicked point,
+	// not at the lead member's own spot
+	m_data.m_deliveryDecalTemplate.createRadiusDecal(decalPos != nullptr ? *decalPos : *targetPos,
 		m_data.m_deliveryDecalRadius, getObject()->getControllingPlayer(), m_deliveryDecal);
 
 	if( m_data.m_diveStartDistance <= 0.0f )

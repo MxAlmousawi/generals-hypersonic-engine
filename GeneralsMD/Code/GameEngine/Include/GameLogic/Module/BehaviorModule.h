@@ -58,6 +58,7 @@ class OverchargeBehaviorInterface;
 class TransportPassengerInterface;
 class CaveInterface;
 class LandMineInterface;
+class MunitionMagazineInterface;	// Hypersonic @feature (D-039)
 
 class ProjectileUpdateInterface;
 class AIUpdateInterface;
@@ -120,6 +121,7 @@ public:
 	virtual TransportPassengerInterface* getTransportPassengerInterface() = 0;
 	virtual CaveInterface* getCaveInterface() = 0;
 	virtual LandMineInterface* getLandMineInterface() = 0;
+	virtual MunitionMagazineInterface* getMunitionMagazineInterface() = 0;	// Hypersonic @feature (D-039)
 	virtual DieModuleInterface* getEjectPilotDieInterface() = 0;
 	// move from UpdateModuleInterface (srj)
 	virtual ProjectileUpdateInterface* getProjectileUpdateInterface() = 0;
@@ -175,6 +177,7 @@ public:
 	virtual TransportPassengerInterface* getTransportPassengerInterface() override { return nullptr; }
 	virtual CaveInterface* getCaveInterface() override { return nullptr; }
 	virtual LandMineInterface* getLandMineInterface() override { return nullptr; }
+	virtual MunitionMagazineInterface* getMunitionMagazineInterface() override { return nullptr; }	// Hypersonic @feature (D-039)
 	virtual DieModuleInterface* getEjectPilotDieInterface() override { return nullptr; }
 	// interface acquisition (moved from UpdateModule)
 	virtual ProjectileUpdateInterface* getProjectileUpdateInterface() override { return nullptr; }
@@ -249,6 +252,8 @@ public:
 	virtual void transferRunwayReservationToNextInLineForTakeoff(ObjectID id) = 0;
 	virtual Real getApproachHeight() const = 0;
 	virtual Real getLandingDeckHeightOffset() const = 0;
+	virtual Bool hasParkingKindRestriction() const { return false; }	///< Hypersonic (D-246) only some aircraft may park here
+	virtual Bool acceptsAircraftType( const ThingTemplate * ) const { return true; }	///< Hypersonic (D-246) const admission check
 	virtual void setHealee(Object* healee, Bool add) = 0;
 	virtual void killAllParkedUnits() = 0;
 	virtual void defectAllParkedUnits(Team* newTeam, UnsignedInt detectionTime) = 0;
@@ -256,6 +261,11 @@ public:
 
 	virtual const std::vector<Coord3D>* getTaxiLocations( ObjectID id ) const = 0;
 	virtual const std::vector<Coord3D>* getCreationLocations( ObjectID id ) const = 0;
+
+	// Hypersonic @feature Launch facilities (D-039) read which object holds each parking space (pad).
+	// Space indices match the exit doors handed out by reserveDoorForExit. Called from the client too: const, no side effects.
+	virtual Int getSpaceCount() const { return 0; }
+	virtual ObjectID getSpaceOccupant( Int index ) const { return INVALID_ID; }
 };
 
 //-------------------------------------------------------------------------------------------------

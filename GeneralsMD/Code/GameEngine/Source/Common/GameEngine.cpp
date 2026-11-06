@@ -33,12 +33,14 @@
 #include "Common/BuildAssistant.h"
 #include "Common/CRCDebug.h"
 #include "Common/FramePacer.h"
+#include "Common/HangWatch.h"
 #include "Common/Radar.h"
 #include "Common/PlayerTemplate.h"
 #include "Common/Team.h"
 #include "Common/PlayerList.h"
 #include "Common/GameAudio.h"
 #include "Common/GameEngine.h"
+#include "GameLogic/HypersonicScenario.h"
 #include "Common/INI.h"
 #include "Common/INIException.h"
 #include "Common/MessageStream.h"
@@ -257,6 +259,10 @@ GameEngine::GameEngine()
 //-------------------------------------------------------------------------------------------------
 GameEngine::~GameEngine()
 {
+	// Hypersonic @feature (D-049) dev test harness
+	delete TheHypersonicScenario;
+	TheHypersonicScenario = nullptr;
+
 	//extern std::vector<std::string>	preloadTextureNamesGlobalHack;
 	//preloadTextureNamesGlobalHack.clear();
 
@@ -451,6 +457,16 @@ void GameEngine::init()
 
 
 		DEBUG_ASSERTCRASH(TheWritableGlobalData,("TheWritableGlobalData expected to be created"));
+
+		// Hypersonic @bugfix (D-145) mount the mod archive before GameData is read, otherwise the retail
+		// Data\INI\GameData.ini is used and the mod's (MaxCameraHeight, ...) never is. Only -mod is parsed here;
+		// the other engine-init arguments still come after GameData and override it as before. Without a mod
+		// loadMods does nothing, so retail is unchanged. GameData then goes into xferCRC from the mod file.
+		CommandLine::parseCommandLineForMod();
+		TheArchiveFileSystem->loadMods();
+		if (TheGlobalData->m_modBIG.isNotEmpty() || TheGlobalData->m_modDir.isNotEmpty())
+			TheFileSystem->clearFileExistenceCache();
+
 		initSubsystem(TheWritableGlobalData, "TheWritableGlobalData", TheWritableGlobalData, &xferCRC, "Data\\INI\\Default\\GameData", "Data\\INI\\GameData");
 		TheWritableGlobalData->parseCustomDefinition();
 
@@ -472,7 +488,10 @@ void GameEngine::init()
 		// special-case: parse command-line parameters after loading global data
 		CommandLine::parseCommandLineForEngineInit();
 
-		TheArchiveFileSystem->loadMods();
+		// Hypersonic @feature (D-134) the mod archive (mounted above, D-145) changes which skirmish scripts win over
+		// the loose retail ones: hash the scripts the game will really use.
+		if (TheGlobalData->m_modBIG.isNotEmpty() || TheGlobalData->m_modDir.isNotEmpty())
+			TheWritableGlobalData->recomputeExeCRC();
 
 		// doesn't require resets so just create a single instance here.
 		TheGameLODManager = MSGNEW("GameEngineSubsystem") GameLODManager;
@@ -901,16 +920,22 @@ void GameEngine::update()
 			// VERIFY CRC needs to be in this code block.  Please to not pull TheGameLogic->update() inside this block.
 			VERIFY_CRC
 
+			// Hypersonic @feature (D-274) The stage markers name the part of a frame in a hang report.
+			HangWatch::setStage(HangWatch::Stage_Radar);
 			TheRadar->UPDATE();
 
 			/// @todo Move audio init, update, etc, into GameClient update
 
+			HangWatch::setStage(HangWatch::Stage_Audio);
 			TheAudio->UPDATE();
+			HangWatch::setStage(HangWatch::Stage_Client);
 			TheGameClient->UPDATE();
+			HangWatch::setStage(HangWatch::Stage_Messages);
 			TheMessageStream->propagateMessages();
 
 			if (TheNetwork != nullptr)
 			{
+				HangWatch::setStage(HangWatch::Stage_Network);
 				TheNetwork->UPDATE();
 			}
 		}
@@ -918,10 +943,12 @@ void GameEngine::update()
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
+			HangWatch::setStage(HangWatch::Stage_Logic);
 			TheGameLogic->UPDATE();
 
 			if (!TheFramePacer->isTimeFrozen())
 			{
+				HangWatch::setStage(HangWatch::Stage_ClientStep);
 				TheGameClient->step();
 			}
 		}
@@ -944,6 +971,7 @@ void GameEngine::execute()
 	// pretty basic for now
 	while( !m_quitting )
 	{
+		HangWatch_mainLoopTick(); // Hypersonic @feature (D-274)
 
 		//if (TheGlobalData->m_vTune)
 		{
@@ -1005,6 +1033,7 @@ void GameEngine::execute()
 				}
 			}
 
+			HangWatch::setStage(HangWatch::Stage_FramePacer);
 			TheFramePacer->update();
 		}
 
@@ -1018,6 +1047,8 @@ void GameEngine::execute()
 #endif
 
 	}
+
+	HangWatch::beginLongWork(); // Hypersonic @feature (D-274) Shutting down can take a while.
 }
 
 /** -----------------------------------------------------------------------------------------------

@@ -131,4 +131,16 @@ public:
 	Bool getShowMoneyPerMinute() const;
 
 	Real getGameWindowTransitionSpeedMultiplier() const;
+
+	// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): "CameraZoomOut" overrides GameData's
+	// MaxCameraHeight (client only: no game logic reads it). The choices (D-258): 310 (stock), then 350 to 850 in steps
+	// of 50; 550 is the D-145 default. Ctrl + mouse wheel steps through them in game (LookAtXlat).
+	Real getCameraZoomOut() const;										///< the saved choice, 0 = none saved (keep GameData's)
+	static Int getCameraZoomOutChoiceCount();
+	static Real getCameraZoomOutChoice( Int index );
+	static Int getCameraZoomOutDefaultIndex();					///< 550, GameData.ini's MaxCameraHeight (D-145)
+	static Int findCameraZoomOutIndex( Real height );			///< the nearest choice
+	static void applyCameraZoomOut( Real height );				///< set MaxCameraHeight now and adjust the tactical view
+	static Real stepCameraZoomOut( Real height, Int steps );	///< the choice `steps` entries away from the nearest one (clamped)
+	static void saveCameraZoomOut( Real height );				///< write "CameraZoomOut" to the player's Options.ini
 };

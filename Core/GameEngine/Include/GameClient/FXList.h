@@ -138,6 +138,23 @@ public:
 		m_nuggets.push_back(fxn);
 	}
 
+	// Hypersonic @feature (Generals Hypersonic D-060) Scaled explosions. An FXList with ReferenceDamage > 0 is designed
+	// for a blast of that damage; a weapon with ScaleDetonationFX = Yes plays it at scale sqrt(damage / ReferenceDamage)
+	// (D-016: radius ~ mass^1/3, damage ~ mass^2/3, so size ~ sqrt(damage)). While a ScaleScope is alive every nugget
+	// played scales its lengths (particle sizes, speeds, volumes, offsets, light and scorch radius) and its camera shake.
+	Real getReferenceDamage() const { return m_referenceDamage; }
+	static void parseReferenceDamage(INI *ini, void *instance, void *store, const void *userData);
+	static Real getCurrentScale() { return s_currentScale; }
+	static void setCurrentScale(Real scale) { s_currentScale = scale; }
+	class ScaleScope
+	{
+	public:
+		ScaleScope(Real scale) : m_previous(FXList::getCurrentScale()) { FXList::setCurrentScale(scale); }
+		~ScaleScope() { FXList::setCurrentScale(m_previous); }
+	private:
+		Real m_previous;
+	};
+
 	/// inline convenience method to avoid having to check for null.
 	inline static void doFXPos(const FXList* fx, const Coord3D *primary, const Matrix3D* primaryMtx = nullptr, const Real primarySpeed = 0.0f, const Coord3D *secondary = nullptr, const Real overrideRadius = 0.0f)
 	{
@@ -179,6 +196,8 @@ private:
 	typedef std::list< FXNugget* > FXNuggetList;
 
 	FXNuggetList m_nuggets;
+	Real m_referenceDamage;					///< Hypersonic (D-060) the damage this list is designed for; 0 = never scaled
+	static Real s_currentScale;			///< Hypersonic (D-060) scale of the FX being played (1 = as authored)
 
 };
 

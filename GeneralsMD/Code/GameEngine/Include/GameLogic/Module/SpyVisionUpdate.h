@@ -34,8 +34,10 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "GameLogic/Module/UpdateModule.h"
 #include "GameLogic/Module/UpgradeModule.h"
+#include "Common/Science.h"	// Hypersonic (D-066)
 
 class Player;
+class ObjectCreationList;
 
 //-------------------------------------------------------------------------------------------------
 class SpyVisionUpdateModuleData : public UpdateModuleData
@@ -48,6 +50,17 @@ public:
 	UnsignedInt			m_selfPoweredDuration;
 	UnsignedInt			m_selfPoweredInterval;
 	KindOfMaskType	m_spyOnKindof;
+	// Hypersonic @feature science-levelled reveal (Generals Hypersonic D-066): "RevealLevel = <science> <OCL>" (lowest level
+	// first). When any is set the module does not spy: every SelfPoweredInterval, while its owner has one of the
+	// sciences, it creates the OCL of the highest one owned at each enemy object of SpyOnKindof (the OCL's objects do the
+	// revealing: vision, shroud clearing, stealth detection, lifetime). One object per player does it (the lowest ID of
+	// this template); none while it is under construction or disabled.
+	struct RevealLevel
+	{
+		ScienceType									m_science;
+		const ObjectCreationList*		m_ocl;
+	};
+	std::vector<RevealLevel>	m_revealLevels;
 
 	SpyVisionUpdateModuleData()
 	{
@@ -68,6 +81,7 @@ public:
 			{ "SelfPoweredDuration",	INI::parseDurationUnsignedInt,	nullptr, offsetof( SpyVisionUpdateModuleData, m_selfPoweredDuration ) },
 			{ "SelfPoweredInterval",	INI::parseDurationUnsignedInt,	nullptr, offsetof( SpyVisionUpdateModuleData, m_selfPoweredInterval ) },
 			{ "SpyOnKindof",					KindOfMaskType::parseFromINI,		nullptr, offsetof( SpyVisionUpdateModuleData, m_spyOnKindof ) },
+			{ "RevealLevel",					parseRevealLevel,								nullptr, offsetof( SpyVisionUpdateModuleData, m_revealLevels ) },	// Hypersonic (D-066)
 			{ 0, 0, 0, 0 }
 		};
 
@@ -75,6 +89,8 @@ public:
 		p.add(dataFieldParse);
 		p.add(UpgradeMuxData::getFieldParse(), offsetof( SpyVisionUpdateModuleData, m_upgradeMuxData ));
 	}
+
+	static void parseRevealLevel( INI* ini, void *instance, void *store, const void* userData );	// Hypersonic (D-066)
 };
 
 //-------------------------------------------------------------------------------------------------
@@ -137,6 +153,8 @@ protected:
 private:
 
 	void doActivationWork( Player *playerToSetFor, Bool setting );
+	UpdateSleepTime updateReveal();					///< Hypersonic @feature science-levelled reveal (D-066)
+	Bool isPlayersRevealer() const;					///< Hypersonic (D-066): the lowest-ID finished object of this template
 
 	UnsignedInt m_deactivateFrame;
 	UnsignedInt m_disabledUntilFrame; //sabotaged, emp'd, etc.

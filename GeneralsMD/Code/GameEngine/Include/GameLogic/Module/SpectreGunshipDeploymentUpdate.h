@@ -64,6 +64,10 @@ class SpectreGunshipDeploymentUpdateModuleData : public ModuleData
 {
 public:
 	SpecialPowerTemplate *m_specialPowerTemplate;
+	// Hypersonic @feature (D-200) the power the new gunship flies its sortie with (default: m_specialPowerTemplate).
+	// A separate, script-only template keeps a launched gunship from becoming a source of the player's power
+	// (side-bar shortcut, AI), so every activation creates a new gunship instead of re-targeting a living one.
+	SpecialPowerTemplate *m_gunshipSpecialPowerTemplate;
 	ScienceType						m_extraRequiredScience;		///< science required (if any) to actually execute this power
 	WeaponTemplate	      *m_howitzerWeaponTemplate;
   AsciiString           m_gunshipTemplateName;

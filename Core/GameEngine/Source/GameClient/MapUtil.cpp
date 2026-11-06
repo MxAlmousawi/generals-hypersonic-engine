@@ -35,6 +35,7 @@
 #include "Common/LocalFileSystem.h"
 #include "Common/file.h"
 #include "Common/GlobalData.h"
+#include "Common/HangWatch.h"
 #include "Common/GameState.h"
 #include "Common/GameEngine.h"
 #include "Common/NameKeyGenerator.h"
@@ -324,6 +325,31 @@ AsciiString MapCache::getUserMapDir() const
 	return tmp;
 }
 
+#if RTS_ZEROHOUR
+// Hypersonic @feature (Generals Hypersonic D-146) the mod has its own user-data folder (D-134), so custom maps in vanilla
+// Zero Hour's "Documents\<UserDataLeafName>\Maps" are listed too. That folder is only read: its maps are cached in our
+// own Maps\MapCache.ini, a map transfer always writes into our folder, and a map in our folder wins over a vanilla map
+// in a folder of the same name.
+AsciiString MapCache::getVanillaUserMapDir() const
+{
+	const AsciiString &vanillaUserData = TheGlobalData->getPath_VanillaUserData();
+	if (vanillaUserData.isEmpty() || vanillaUserData.compareNoCase(TheGlobalData->getPath_UserData()) == 0)
+		return AsciiString::TheEmptyString;
+	AsciiString tmp = vanillaUserData;
+	tmp.concat(getMapDir());
+	return tmp;
+}
+
+Bool MapCache::isVanillaUserMap( const AsciiString &mapPath ) const
+{
+	AsciiString dir = getVanillaUserMapDir();
+	if (dir.isEmpty())
+		return FALSE;
+	dir.concat('\\');
+	return mapPath.startsWithNoCase(dir.str());
+}
+#endif
+
 AsciiString MapCache::getMapExtension() const
 {
 	return "map";
@@ -350,7 +376,13 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 	MapCache::iterator it = begin();
 	for (; it != end(); ++it)
 	{
-		if (it->first.startsWithNoCase(mapDir.str()))
+		Bool inCache = it->first.startsWithNoCase(mapDir.str());
+#if RTS_ZEROHOUR
+		// Hypersonic @feature (D-146) our user map cache also holds the vanilla folder's maps (never written there)
+		if (!inCache && mapDir.compareNoCase(getUserMapDir()) == 0)
+			inCache = isVanillaUserMap(it->first);
+#endif
+		if (inCache)
 		{
 			const MapMetaData &md = it->second;
 			fprintf(fp, "\nMapCache %s\n", AsciiStringToQuotedPrintable(it->first.str()).str());
@@ -406,6 +438,7 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 
 void MapCache::updateCache()
 {
+	HangWatch::beginLongWork(); // Hypersonic @feature (D-274) Listing the maps can take a while the first time.
 	setFPMode();
 
 	const AsciiString mapDir = getMapDir();
@@ -442,7 +475,14 @@ void MapCache::updateCache()
 	}
 
 	// Load user maps from disk and update any discrepancies from the map cache.
-	if (loadMapsFromDisk(userMapDir, FALSE))
+	Bool userMapsChanged = loadMapsFromDisk(userMapDir, FALSE);
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-146) then the vanilla Zero Hour user maps (after ours, so ours win), cached in our file
+	const AsciiString vanillaMapDir = getVanillaUserMapDir();
+	if (!vanillaMapDir.isEmpty() && loadMapsFromDisk(vanillaMapDir, FALSE))
+		userMapsChanged = TRUE;
+#endif
+	if (userMapsChanged)
 	{
 		writeCacheINI(userMapDir);
 		m_doLoadStandardMapCacheINI = TRUE;
@@ -522,6 +562,13 @@ Bool MapCache::loadMapsFromDisk( const AsciiString &mapDir, Bool isOfficial, Boo
 
 	TheFileSystem->getFileListInDirectory(toplevelPattern, filenamepattern, filepathList, TRUE);
 
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-146) scanning the vanilla user maps: skip a map that our own user Maps folder also has
+	AsciiString vanillaMapDir = getVanillaUserMapDir();
+	const Bool isVanillaDir = !vanillaMapDir.isEmpty() && mapDir.compareNoCase(vanillaMapDir) == 0;
+	const AsciiString userMapDir = getUserMapDir();
+#endif
+
 	filepathIt = filepathList.begin();
 
 	for (; filepathIt != filepathList.end(); ++filepathIt)
@@ -554,6 +601,18 @@ Bool MapCache::loadMapsFromDisk( const AsciiString &mapDir, Bool isOfficial, Boo
 			DEBUG_CRASH(("Found map '%s' in wrong spot (%s)", filenameLower.str(), filepathLower.str()));
 			continue;
 		}
+
+#if RTS_ZEROHOUR
+		if (isVanillaDir && filepathLower.startsWithNoCase(vanillaMapDir.str()))
+		{
+			AsciiString ownPath = userMapDir;
+			ownPath.concat(filepathLower.str() + vanillaMapDir.getLength());
+			ownPath.toLower();
+			MapCache::const_iterator own = find(ownPath);
+			if (own != end() && own->second.m_doesExist)
+				continue;
+		}
+#endif
 
 		if (!TheFileSystem->getFileInfo(*filepathIt, &fileInfo))
 		{
@@ -718,6 +777,11 @@ MapCache *TheMapCache = nullptr;
 
 Bool WouldMapTransfer( const AsciiString& mapName )
 {
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-146) a vanilla folder map is a user map too: the host can send it
+	if (TheMapCache->isVanillaUserMap(mapName))
+		return TRUE;
+#endif
 	return mapName.startsWithNoCase(TheMapCache->getUserMapDir());
 }
 
@@ -784,7 +848,13 @@ static Bool addMapToMapListbox(
 	const AsciiString& mapName,
 	const MapMetaData& mapMetaData)
 {
-	const Bool mapOk = mapName.startsWithNoCase(mapDir.str()) && lbData.isMultiplayer == mapMetaData.m_isMultiplayer && !mapMetaData.m_displayName.isEmpty();
+	Bool inMapDir = mapName.startsWithNoCase(mapDir.str());
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-146) the user map list also shows the vanilla folder's maps
+	if (!inMapDir && mapDir.compareNoCase(TheMapCache->getMapDir()) != 0)
+		inMapDir = TheMapCache->isVanillaUserMap(mapName);
+#endif
+	const Bool mapOk = inMapDir && lbData.isMultiplayer == mapMetaData.m_isMultiplayer && !mapMetaData.m_displayName.isEmpty();
 
 	if (mapOk)
 	{

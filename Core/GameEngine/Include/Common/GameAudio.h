@@ -167,6 +167,9 @@ class AudioManager : public SubsystemInterface
 		virtual AudioHandle addAudioEvent( const AudioEventRTS *eventToAdd );	///< Add an audio event (event must be declared in an INI file)
 		virtual void removeAudioEvent( AudioHandle audioEvent );	///< Remove an audio event, stop for instance.
 		virtual void killAudioEventImmediately( AudioHandle audioEvent ) = 0;
+		// Hypersonic @feature (D-186) fade a playing sound out over this many ms, then stop it; a 3D sound keeps following
+		// its object while it fades. Backends without it stop the sound at once.
+		virtual void fadeOutAudioEvent( AudioHandle audioEvent, UnsignedInt milliseconds ) { killAudioEventImmediately( audioEvent ); }
 
 		virtual Bool isValidAudioEvent( const AudioEventRTS *eventToCheck ) const;	///< validate that this piece of audio exists
 		virtual Bool isValidAudioEvent( AudioEventRTS *eventToCheck ) const;	///< validate that this piece of audio exists

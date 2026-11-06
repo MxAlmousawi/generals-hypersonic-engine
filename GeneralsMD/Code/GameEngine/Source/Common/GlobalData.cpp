@@ -854,6 +854,7 @@ GlobalData::GlobalData()
 #endif
 	m_minCameraHeight = 100.0f;
 	m_maxCameraHeight = 300.0f;
+	m_gameDataMaxCameraHeight = 0.0f;
 	m_terrainHeightAtEdgeOfMap = 0.0f;
 
 	m_unitDamagedThresh = 0.5f;
@@ -992,6 +993,8 @@ GlobalData::GlobalData()
 
 	m_buildMapCache = FALSE;
 	m_initialFile.clear();
+	m_hypersonicScenario.clear();	// Hypersonic @feature (D-049)
+	m_hypersonicScenarioOutput.clear();
 	m_pendingFile.clear();
 
 	m_simulateReplays.clear();
@@ -1226,6 +1229,14 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_playerInfoListFontSize = optionPref.getPlayerInfoListFontSize();
 	TheWritableGlobalData->m_showMoneyPerMinute = optionPref.getShowMoneyPerMinute();
 	TheWritableGlobalData->m_gameWindowTransitionSpeedMultiplier = optionPref.getGameWindowTransitionSpeedMultiplier();
+	// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): the player's choice replaces MaxCameraHeight
+	{
+		if (TheWritableGlobalData->m_gameDataMaxCameraHeight <= 0.0f)
+			TheWritableGlobalData->m_gameDataMaxCameraHeight = TheWritableGlobalData->m_maxCameraHeight;
+		const Real cameraZoomOut = optionPref.getCameraZoomOut();
+		if (cameraZoomOut > 0.0f)
+			TheWritableGlobalData->m_maxCameraHeight = cameraZoomOut;
+	}
 
 	TheWritableGlobalData->m_antiAliasLevel = optionPref.getAntiAliasing();
 	TheWritableGlobalData->m_textureFilteringMode = optionPref.getTextureFilterMode();
@@ -1306,6 +1317,16 @@ UnsignedInt GlobalData::generateExeCRC()
 	{
 		version = TheVersion->getVersionNumber();
 		exeCRC.computeCRC( &version, sizeof(UnsignedInt) );
+
+		// Hypersonic @feature (D-134) the VC6 build fakes the retail exe CRC, so two different Hypersonic engines
+		// would join the same game and desync later: with a mod loaded, mix in the engine commit ("~" = dirty).
+		if (TheGlobalData != nullptr && (TheGlobalData->m_modBIG.isNotEmpty() || TheGlobalData->m_modDir.isNotEmpty()))
+		{
+			AsciiString build = TheVersion->getAsciiGitShortHash();
+			build.concat(TheVersion->getAsciiGitCommitCount());
+			if (!build.isEmpty())
+				exeCRC.computeCRC( build.str(), build.getLength() );
+		}
 	}
 	// Add in MP scripts to the EXE CRC, since the game will go out of sync if they change
 	fp = TheFileSystem->openFile("Data\\Scripts\\SkirmishScripts.scb", File::READ | File::BINARY);
@@ -1386,9 +1407,29 @@ AsciiString GlobalData::BuildUserDataPathFromRegistry()
 			leafName = "Command and Conquer Generals Zero Hour Data";
 		}
 
+		// Hypersonic @feature (D-134) own user-data folder (options, saves, replays, maps, crash info), so the mod
+		// never mixes with vanilla Zero Hour. The first start takes over the vanilla Options.ini (resolution,
+		// volumes, player name); vanilla files are only read.
+		AsciiString vanillaOptions = myDocumentsDirectory;
+		vanillaOptions.concat(leafName);
+		if (!vanillaOptions.endsWith("\\"))
+			vanillaOptions.concat('\\');
+		// Hypersonic @feature (D-146) remember the vanilla folder: its custom maps are listed too (read-only)
+		m_vanillaUserDataDir = vanillaOptions;
+		vanillaOptions.concat("Options.ini");
+		leafName = "Generals Hypersonic Data";
+
 		myDocumentsDirectory.concat(leafName);
 		if (!myDocumentsDirectory.endsWith("\\"))
 			myDocumentsDirectory.concat('\\');
+
+		AsciiString hypersonicOptions = myDocumentsDirectory;
+		hypersonicOptions.concat("Options.ini");
+		if (GetFileAttributes(hypersonicOptions.str()) == (DWORD)-1)
+		{
+			CreateDirectory(myDocumentsDirectory.str(), nullptr);
+			CopyFile(vanillaOptions.str(), hypersonicOptions.str(), TRUE);
+		}
 	}
 
 	return myDocumentsDirectory;

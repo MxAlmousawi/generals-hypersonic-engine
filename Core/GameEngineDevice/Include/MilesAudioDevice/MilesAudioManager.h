@@ -68,6 +68,8 @@ struct PlayingAudio
 	volatile PlayingStatus m_status; // This member is adjusted by another running thread.
 	Short m_framesFaded;
 	Bool m_fade;
+	UnsignedInt m_fadeOutStartMs;		///< Hypersonic @feature (D-186) fadeOutAudioEvent: start time (timeGetTime)
+	UnsignedInt m_fadeOutMs;				///< Hypersonic @feature (D-186) fade length, 0 = not fading out
 	volatile Bool m_rerequestOnNextUpdate;
 	volatile Bool m_requestStop; // Let the audio finish but stop looping if it is looping
 
@@ -79,6 +81,8 @@ struct PlayingAudio
 		, m_status(PS_Playing)
 		, m_framesFaded(0)
 		, m_fade(false)
+		, m_fadeOutStartMs(0)
+		, m_fadeOutMs(0)
 		, m_rerequestOnNextUpdate(false)
 		, m_requestStop(false)
 	{}
@@ -118,6 +122,7 @@ struct OpenAudioFile
 
 typedef std::hash_map< AsciiString, OpenAudioFile, rts::hash<AsciiString>, rts::equal_to<AsciiString>/**/> OpenFilesHash;
 typedef OpenFilesHash::iterator OpenFilesHashIt;
+typedef std::list<OpenAudioFile> OpenAudioFileList;
 
 class AudioFileCache
 {
@@ -131,23 +136,31 @@ class AudioFileCache
 		void setMaxSize( UnsignedInt size );
 		// End Protected by mutex
 
+		// Main thread only. Stops the samples that still play evicted files and frees the ones no longer in use.
+		void releaseEvictedFiles();
+
 		// Note: These functions should be used for informational purposes only. For speed reasons,
 		// they are not protected by the mutex, so they are not guaranteed to be valid if called from
 		// outside the audio cache. They should be used as a rough estimate only.
-		UnsignedInt getCurrentlyUsedSize() const { return m_currentlyUsedSize; }
+		UnsignedInt getCurrentlyUsedSize() const { return m_currentlyUsedSize + m_evictedSize; }
 		UnsignedInt getMaxSize() const { return m_maxSize; }
 
 	protected:
-		void releaseOpenAudioFile( OpenAudioFile *fileToRelease );
+		void stopSamplesUsingFiles( const std::list<const void *>& filesToStop );
+		void freeOpenAudioFile( OpenAudioFile *fileToFree );
+		void freeOpenAudioFiles( OpenAudioFileList& filesToFree );
 
 		// This function will return TRUE if it was able to free enough space, and FALSE otherwise.
-		Bool freeEnoughSpaceForSample(const OpenAudioFile& sampleThatNeedsSpace);
+		Bool freeEnoughSpaceForSample(const OpenAudioFile& sampleThatNeedsSpace, OpenAudioFileList& filesToFree);
 
 		OpenFilesHash m_openFiles;
-		UnsignedInt m_currentlyUsedSize;
+		OpenAudioFileList m_evictedFiles; ///< Evicted files that are still in use, freed on the main thread once their samples stop.
+		UnsignedInt m_currentlyUsedSize; ///< Size of the files in m_openFiles, new files are admitted against this.
+		UnsignedInt m_evictedSize; ///< Size of the files in m_evictedFiles, still allocated until released.
 		UnsignedInt m_maxSize;
 		HANDLE m_mutex;
 		const char *m_mutexName;
+		HANDLE m_readMutex;
 };
 
 class MilesAudioManager : public AudioManager
@@ -183,6 +196,8 @@ class MilesAudioManager : public AudioManager
 		virtual void pauseAmbient( Bool shouldPause ) override;
 
 		virtual void killAudioEventImmediately( AudioHandle audioEvent ) override;
+		virtual void fadeOutAudioEvent( AudioHandle audioEvent, UnsignedInt milliseconds ) override;	///< Hypersonic @feature (D-186)
+		Bool updateFadeOut( PlayingAudio *playing );	///< Hypersonic @feature (D-186)
 
 		///< Return whether the current audio is playing or not.
 		///< NOTE NOTE NOTE !!DO NOT USE THIS IN FOR GAMELOGIC PURPOSES!! NOTE NOTE NOTE
@@ -365,6 +380,7 @@ class MilesAudioManagerDummy : public MilesAudioManager
 	virtual void resumeAudio(AudioAffect which) override {}
 	virtual void pauseAmbient(Bool shouldPause) override {}
 	virtual void killAudioEventImmediately(AudioHandle audioEvent) override {}
+	virtual void fadeOutAudioEvent(AudioHandle audioEvent, UnsignedInt milliseconds) override {}
 	virtual AsciiString nextMusicTrack() override { return AsciiString::TheEmptyString; }
 	virtual AsciiString prevMusicTrack() override { return AsciiString::TheEmptyString; }
 	virtual Bool isMusicPlaying() const override { return false; }

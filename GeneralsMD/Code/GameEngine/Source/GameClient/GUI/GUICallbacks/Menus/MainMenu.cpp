@@ -115,6 +115,8 @@ static NameKeyType getUpdateID = NAMEKEY_INVALID;
 static NameKeyType buttonTRAININGID = NAMEKEY_INVALID;
 static NameKeyType buttonChallengeID = NAMEKEY_INVALID;
 static NameKeyType buttonUSAID = NAMEKEY_INVALID;
+// Hypersonic @feature (D-244): campaign entry from the home page.
+static NameKeyType buttonIranChallengeID = NAMEKEY_INVALID;
 static NameKeyType buttonGLAID = NAMEKEY_INVALID;
 static NameKeyType buttonChinaID = NAMEKEY_INVALID;
 static NameKeyType buttonUSARecentSaveID = NAMEKEY_INVALID;
@@ -459,6 +461,7 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 //	buttonTRAININGID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonTRAINING" );
 	buttonChallengeID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonChallenge" );
 	buttonUSAID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonUSA" );
+	buttonIranChallengeID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonIranChallenge" );
 	buttonGLAID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonGLA" );
 	buttonChinaID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonChina" );
 	buttonUSARecentSaveID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonUSARecentSave" );
@@ -1482,6 +1485,21 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 				}
 //#endif
 
+			}
+			// Hypersonic @feature (D-244): reuse the stock modal difficulty selector.
+			else if(controlID == buttonIranChallengeID)
+			{
+				if(campaignSelected || dontAllowTransitions)
+					break;
+				TheCampaignManager->setCampaign( "IRAN_CHALLENGE" );
+				launchChallengeMenu = FALSE;
+				WindowLayout *layout = TheWindowManager->winCreateLayout( "Menus/DifficultySelect.wnd" );
+				if(layout)
+				{
+					layout->runInit();
+					layout->hide( FALSE );
+					layout->bringForward();
+				}
 			}
 			else if(controlID == buttonChallengeID)
 			{

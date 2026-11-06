@@ -90,6 +90,14 @@ const char *const TheEvaMessageNames[] =
   "SUPERWEAPONLAUNCHED_OWN_SNEAK_ATTACK",
   "SUPERWEAPONLAUNCHED_ALLY_SNEAK_ATTACK",
   "SUPERWEAPONLAUNCHED_ENEMY_SNEAK_ATTACK",
+	// Hypersonic @feature (D-163)
+	"SUPERWEAPONLAUNCHED_ALLY_KHORRAMSHAHR",
+	"SUPERWEAPONLAUNCHED_ENEMY_KHORRAMSHAHR",
+	"SUPERWEAPONREADY_OWN_KHORRAMSHAHR",
+	"SUPERWEAPONDETECTED_ENEMY_KHORRAMSHAHR",
+	"SUPERWEAPONREADY_ENEMY_KHORRAMSHAHR",
+	"ENEMYKAVEHDETECTED",
+	"OWNKAVEHDETECTED",
 
 	//****************************************************************************
 	//Kris: Don't forget to add another handler below -- it's ghey-ly implemented.
@@ -153,6 +161,13 @@ const ShouldPlayFunc Eva::s_shouldPlayFuncs[] =
   Eva::shouldPlayGenericHandler,
   Eva::shouldPlayGenericHandler,
   Eva::shouldPlayGenericHandler,
+	Eva::shouldPlayGenericHandler,	// Hypersonic @feature (D-163) SuperweaponLaunched_Ally_Khorramshahr
+	Eva::shouldPlayGenericHandler,	// Hypersonic @feature (D-163) SuperweaponLaunched_Enemy_Khorramshahr
+	Eva::shouldPlayGenericHandler,	// Hypersonic @feature (D-163) SuperweaponReady_Own_Khorramshahr
+	Eva::shouldPlayGenericHandler,	// Hypersonic @feature (D-163) SuperweaponDetected_Enemy_Khorramshahr
+	Eva::shouldPlayGenericHandler,	// Hypersonic @feature (D-232) SuperweaponReady_Enemy_Khorramshahr
+	Eva::shouldPlayGenericHandler,	// Hypersonic @feature (D-232) EnemyKavehDetected
+	Eva::shouldPlayGenericHandler,	// Hypersonic @feature (D-232) OwnKavehDetected
 };
 
 

@@ -2645,6 +2645,68 @@ ParticleInfo ParticleSystem::mergeRelatedParticleSystems( ParticleSystem *master
 }
 
 // ------------------------------------------------------------------------------------------------
+// Hypersonic @feature (Generals Hypersonic D-060) Scale a freshly created system for a scaled explosion (an FXList played
+// with a scale, FXList::ScaleScope): everything with a length unit is multiplied by 'scale' (particle size and size
+// rates, the emission volume, the emission and drift velocities, gravity), so the effect keeps its shape and timing at
+// another size. The burst count is multiplied by 'countScale' but never drops below one particle if it had one.
+// Slave and per-particle attached systems are created from their own templates and are not scaled. Client-side only.
+// ------------------------------------------------------------------------------------------------
+static void scaleRandomVariable( GameClientRandomVariable &var, Real scale )
+{
+	var.setRange( var.getMinimumValue() * scale, var.getMaximumValue() * scale, var.getDistributionType() );
+}
+
+void ParticleSystem::applyScale( Real scale, Real countScale )
+{
+	if (scale <= 0.0f || countScale <= 0.0f)
+		return;
+
+	m_sizeCoeff *= scale;				// the start size and the size rate of every particle
+	scaleRandomVariable( m_startSizeRate, scale );
+
+	m_velCoeff.x *= scale;
+	m_velCoeff.y *= scale;
+	m_velCoeff.z *= scale;
+	m_driftVelocity.x *= scale;
+	m_driftVelocity.y *= scale;
+	m_driftVelocity.z *= scale;
+	m_gravity *= scale;
+
+	switch( m_emissionVolumeType )
+	{
+		case LINE:
+			m_emissionVolume.line.start.x *= scale;
+			m_emissionVolume.line.start.y *= scale;
+			m_emissionVolume.line.start.z *= scale;
+			m_emissionVolume.line.end.x *= scale;
+			m_emissionVolume.line.end.y *= scale;
+			m_emissionVolume.line.end.z *= scale;
+			break;
+		case BOX:
+			m_emissionVolume.box.halfSize.x *= scale;
+			m_emissionVolume.box.halfSize.y *= scale;
+			m_emissionVolume.box.halfSize.z *= scale;
+			break;
+		case SPHERE:
+			m_emissionVolume.sphere.radius *= scale;
+			break;
+		case CYLINDER:
+			m_emissionVolume.cylinder.radius *= scale;
+			m_emissionVolume.cylinder.length *= scale;
+			break;
+		default:
+			break;
+	}
+
+	if (countScale != 1.0f)
+	{
+		const Real low = m_burstCount.getMinimumValue();
+		const Real high = m_burstCount.getMaximumValue();
+		m_burstCount.setRange( max( low * countScale, min( low, 1.0f ) ), max( high * countScale, min( high, 1.0f ) ), m_burstCount.getDistributionType() );
+	}
+}
+
+// ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 void ParticleSystem::setLifetimeRange( Real min, Real max )
 {

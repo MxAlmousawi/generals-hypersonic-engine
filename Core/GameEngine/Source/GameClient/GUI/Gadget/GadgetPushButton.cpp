@@ -601,6 +601,7 @@ PushButtonData * getNewPushButtonData()
 	p->drawBorder = FALSE;
 	p->drawClock = NO_CLOCK;
 	p->overlayImage = nullptr;
+	p->badgeImage = nullptr;	// Hypersonic @feature upgrade badge (Generals Hypersonic D-099)
 	return p;
 }
 
@@ -675,6 +676,25 @@ void GadgetButtonDrawOverlayImage( GameWindow *g, const Image *image )
 		pData = getNewPushButtonData();
 	}
 	pData->overlayImage = image;
+	g->winSetUserData(pData);
+}
+
+// Hypersonic @feature upgrade badge (Generals Hypersonic D-099)
+// A small image the W3D button draw puts over the button's top-right corner, after the image,
+// overlay, clock and border (the control bar marks upgrade command buttons with it).
+void GadgetButtonDrawBadgeImage( GameWindow *g, const Image *image )
+{
+	if( g == nullptr )
+		return;
+
+	PushButtonData *pData = (PushButtonData *)g->winGetUserData();
+	if( !pData )
+	{
+		if( image == nullptr )
+			return;
+		pData = getNewPushButtonData();
+	}
+	pData->badgeImage = image;
 	g->winSetUserData(pData);
 }
 

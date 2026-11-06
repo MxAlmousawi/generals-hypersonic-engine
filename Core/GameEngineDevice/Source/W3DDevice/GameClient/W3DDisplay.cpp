@@ -44,6 +44,7 @@ static void drawFramerateBar();
 #include "Common/FramePacer.h"
 #include "Common/ThingFactory.h"
 #include "Common/GlobalData.h"
+#include "Common/HangWatch.h"
 #include "Common/PerfTimer.h"
 #include "Common/FileSystem.h"
 #include "Common/LocalFileSystem.h"
@@ -121,6 +122,10 @@ static Real theLightXOffset = 0.1f;
 static Real theLightYOffset = 0.07f;
 static Int theFlashCount = 0;
 #endif
+
+// Hypersonic @feature (D-049) the dev test harness's next screenshot: taken at the end of the next draw, after
+// EndScene and before Present (with D3DSWAPEFFECT_DISCARD the back buffer is undefined after Present).
+static char s_scenarioShotPath[_MAX_PATH] = "";
 
 //*****************************************************************************************
 //*****************************************************************************************
@@ -2106,7 +2111,18 @@ AGAIN:
 				}
 #endif
 				// render is all done!
-				WW3D::End_Render();
+				if (s_scenarioShotPath[0] != 0)
+				{
+					// Hypersonic @feature (D-049) end the scene without presenting it, read it back; the next frame presents
+					WW3D::End_Render(false);
+					W3D_TakeScreenshotToFile(s_scenarioShotPath);
+					s_scenarioShotPath[0] = 0;
+				}
+				else
+				{
+					HangWatch::setStage(HangWatch::Stage_Present); // Hypersonic @feature (D-274)
+					WW3D::End_Render();
+				}
 			}
 			else
 			{
@@ -3087,6 +3103,14 @@ void W3DDisplay::toggleMovieCapture()
 void W3DDisplay::takeScreenShot(ScreenshotFormat format, Int jpegQuality)
 {
 	W3D_TakeCompressedScreenshot(format, jpegQuality);
+}
+
+// Hypersonic @feature (D-049) dev test harness screenshot (see W3DDisplay::draw)
+void W3DDisplay::takeScreenShotToFile(const char *pngPath)
+{
+	if (s_scenarioShotPath[0] != 0)
+		W3D_ScreenshotFailed(s_scenarioShotPath, "no frame was drawn before the next screenshot");
+	strlcpy(s_scenarioShotPath, pngPath, ARRAY_SIZE(s_scenarioShotPath));
 }
 
 

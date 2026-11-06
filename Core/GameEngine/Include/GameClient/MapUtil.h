@@ -108,6 +108,11 @@ public:
 
 	AsciiString getMapDir() const;
 	AsciiString getUserMapDir() const;
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-146) vanilla Zero Hour's user Maps folder, also listed (read-only); empty if unknown
+	AsciiString getVanillaUserMapDir() const;
+	Bool isVanillaUserMap( const AsciiString &mapPath ) const;
+#endif
 	AsciiString getMapExtension() const;
 
 	const MapMetaData *findMap(AsciiString mapName);

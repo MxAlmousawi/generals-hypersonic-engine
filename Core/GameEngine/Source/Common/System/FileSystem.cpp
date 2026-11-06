@@ -161,6 +161,16 @@ void		FileSystem::update()
 // FileSystem::reset
 //============================================================================
 
+// Hypersonic @feature (D-134) loadMods adds an archive after files were probed: drop the cached answers
+void FileSystem::clearFileExistenceCache()
+{
+#if ENABLE_FILESYSTEM_EXISTENCE_CACHE
+	FastCriticalSectionClass::LockClass lock(m_fileExistMutex);
+	m_fileExist.clear();
+#endif
+}
+
+//============================================================================
 void		FileSystem::reset()
 {
 	USE_PERF_TIMER(FileSystem)
@@ -176,6 +186,16 @@ File*		FileSystem::openFile( const Char *filename, Int access, size_t bufferSize
 {
 	USE_PERF_TIMER(FileSystem)
 	File *file = nullptr;
+
+	// Hypersonic @feature (D-134) a file of the -mod archive beats a loose file of the game folder (retail ships the
+	// skirmish scripts loose), so the mod runs from its own folder without copying anything into the game folder.
+	if ( instance == 0 && (access & (File::WRITE | File::APPEND | File::CREATE | File::TRUNCATE)) == 0
+		&& TheArchiveFileSystem != nullptr && TheArchiveFileSystem->isFileInModArchive(filename) )
+	{
+		file = TheArchiveFileSystem->openFile( filename, 0, 0 );
+		if ( file != nullptr )
+			return file;
+	}
 
 	if ( TheLocalFileSystem != nullptr )
 	{
@@ -303,6 +323,12 @@ Bool FileSystem::getFileInfo(const AsciiString& filename, FileInfo *fileInfo, Fi
 		return FALSE;
 	}
 	memset(fileInfo, 0, sizeof(*fileInfo));
+
+	// Hypersonic @feature (D-134) same order as openFile: a -mod archive file beats a loose file
+	if (instance == 0 && TheArchiveFileSystem != nullptr && TheArchiveFileSystem->isFileInModArchive(filename.str())
+		&& TheArchiveFileSystem->getFileInfo(filename, fileInfo, 0)) {
+		return TRUE;
+	}
 
 	if (TheLocalFileSystem->getFileInfo(filename, fileInfo)) {
 		if (instance == 0) {

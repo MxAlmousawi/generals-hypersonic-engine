@@ -244,6 +244,25 @@ Int ParkingPlaceBehavior::getSpaceIndex( ObjectID id ) const
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature Launch facilities (D-039): the object in a space (pad), or INVALID_ID when the
+// space is empty, only reserved for an exit, or holds a dead object.
+// note: called from client, so MUST NOT modify self in any way, or desyncs will occur
+ObjectID ParkingPlaceBehavior::getSpaceOccupant( Int index ) const
+{
+	if (!m_gotInfo || index < 0 || index >= (Int)m_spaces.size())
+		return INVALID_ID;
+
+	ObjectID id = m_spaces[index].m_objectInSpace;
+	if (id != INVALID_ID)
+	{
+		const Object* obj = TheGameLogic->findObjectByID(id);
+		if (obj == nullptr || obj->isEffectivelyDead())
+			return INVALID_ID;
+	}
+	return id;
+}
+
+//-------------------------------------------------------------------------------------------------
 ParkingPlaceBehavior::ParkingPlaceInfo* ParkingPlaceBehavior::findPPI(ObjectID id)
 {
 	DEBUG_ASSERTCRASH(id != INVALID_ID, ("call findEmptyPPI instead"));
@@ -287,9 +306,21 @@ Bool ParkingPlaceBehavior::shouldReserveDoorWhenQueued(const ThingTemplate* thin
 
 //-------------------------------------------------------------------------------------------------
 // note: called from client, so MUST NOT modify self in any way, or desyncs will occur
+// Hypersonic (D-246) ParkingRequiredKindOf: the Drone Facility's roof slot takes only its Gaza (DRONE), never an
+// allied Raptor/MiG looking for a new airfield or ordered onto it.
+Bool ParkingPlaceBehavior::acceptsAircraft( const ThingTemplate *thing ) const
+{
+	const KindOfMaskType &required = getParkingPlaceBehaviorModuleData()->m_requiredKindOf;
+	return !required.any() || ( thing && thing->isAnyKindOf( required ) );
+}
+
+//-------------------------------------------------------------------------------------------------
 Bool ParkingPlaceBehavior::hasAvailableSpaceFor(const ThingTemplate* thing) const
 {
 	if (!m_gotInfo)	// degenerate case, shouldn't happen, but just in case...
+		return false;
+
+	if (!acceptsAircraft(thing))	// Hypersonic (D-246)
 		return false;
 
 	if (thing->isKindOf(KINDOF_PRODUCED_AT_HELIPAD))
@@ -325,6 +356,13 @@ Bool ParkingPlaceBehavior::reserveSpace(ObjectID id, Real parkingOffset, Parking
 	purgeDead();
 
 	const ParkingPlaceBehaviorModuleData* d = getParkingPlaceBehaviorModuleData();
+
+	if (d->m_requiredKindOf.any())	// Hypersonic (D-246) ParkingRequiredKindOf
+	{
+		const Object* aircraft = TheGameLogic->findObjectByID(id);
+		if (aircraft == nullptr || !acceptsAircraft(aircraft->getTemplate()))
+			return false;
+	}
 
 	ParkingPlaceInfo* ppi = findPPI(id);
 	if (ppi == nullptr)
@@ -367,6 +405,27 @@ Bool ParkingPlaceBehavior::reserveSpace(ObjectID id, Real parkingOffset, Parking
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-246) A parking place with LandingDeckHeightOffset (the Drone Facility's raised Gaza deck) marks
+// its aircraft OBJECT_STATUS_DECK_HEIGHT_OFFSET, so after landing they taxi the aircraft-carrier way and ask for the
+// best parking spot. Stock returned FALSE without setting pos, and the jet taxied off towards the map origin: here the
+// jet's own reserved space (no reassignment on a plain parking place).
+Bool ParkingPlaceBehavior::calcBestParkingAssignment( ObjectID id, Coord3D *pos, Int *oldIndex, Int *newIndex )
+{
+	if( pos )
+	{
+		const ParkingPlaceInfo* ppi = findPPI( id );
+		if( ppi )
+			*pos = getParkingPlaceBehaviorModuleData()->m_parkInHangars ? ppi->m_hangarStart : ppi->m_location;
+		else
+		{
+			const Object* obj = TheGameLogic->findObjectByID( id );
+			*pos = obj ? *obj->getPosition() : *getObject()->getPosition();
+		}
+	}
+	return FALSE;
+}
+
+//-------------------------------------------------------------------------------------------------
 void ParkingPlaceBehavior::calcPPInfo( ObjectID id, PPInfo *info )
 {
 
@@ -386,6 +445,10 @@ void ParkingPlaceBehavior::calcPPInfo( ObjectID id, PPInfo *info )
 		info->parkingOrientation = d->m_parkInHangars ? ppi->m_hangarStartOrient : ppi->m_orientation;
 		info->runwayStart = rr.m_start;
 		info->runwayEnd = rr.m_end;
+		// Hypersonic @bugfix (D-246) a raised deck (LandingDeckHeightOffset) sends its jets down the aircraft-carrier
+		// landing path, which reads these two (never set here): land the airstrip way, from the end back to the start.
+		info->runwayLandingStart = rr.m_end;
+		info->runwayLandingEnd = rr.m_start;
 		info->runwayApproach = rr.m_end;
 		//const Real APPROACH_DIST = 0.5f;	// no, too short, planes may not have enough space to drop altitude
 		const Real APPROACH_DIST = 0.75f;
@@ -656,7 +719,7 @@ void ParkingPlaceBehavior::defectAllParkedUnits(Team* newTeam, UnsignedInt detec
 			JetAIUpdate* ju = (JetAIUpdate *)obj->findUpdateModule(jetKey);
 			Bool takeoffOrLanding = ju ? ju->friend_isTakeoffOrLandingInProgress() : false;
 
-			if (obj->isAboveTerrain() && !takeoffOrLanding)
+			if (isFlyingAboveSpaces(obj) && !takeoffOrLanding)
 			{
 				// if the new team is a different controlling player, this guys loses his space.
 				if (newTeam->getControllingPlayer() != obj->getControllingPlayer())
@@ -674,6 +737,21 @@ void ParkingPlaceBehavior::defectAllParkedUnits(Team* newTeam, UnsignedInt detec
 	}
 
 	purgeDead();
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @bugfix (D-246) on a raised deck (LandingDeckHeightOffset, the Drone Facility's roof runway) a parked
+// aircraft is far above the terrain, so stock isAboveTerrain() took it for airborne: it survived the facility's death
+// and lost its space instead of being captured. Measure from the deck there.
+Bool ParkingPlaceBehavior::isFlyingAboveSpaces( const Object *obj ) const
+{
+	const Real deck = getParkingPlaceBehaviorModuleData()->m_landingDeckHeightOffset;
+	if( deck <= 0.0f )
+		return obj->isAboveTerrain();
+	const Coord3D *pos = obj->getPosition();
+	const Real ground = TheTerrainLogic->getGroundHeight( pos->x, pos->y );
+	const Real DECK_SLOP = 3.0f;
+	return pos->z - ground > deck + DECK_SLOP;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -695,7 +773,7 @@ void ParkingPlaceBehavior::killAllParkedUnits()
 			JetAIUpdate* ju = (JetAIUpdate *)obj->findUpdateModule(jetKey);
 			Bool takeoffOrLanding = ju ? ju->friend_isTakeoffOrLandingInProgress() : false;
 
-			if (obj->isAboveTerrain() && !takeoffOrLanding)
+			if (isFlyingAboveSpaces(obj) && !takeoffOrLanding)
 				continue;
 
 			obj->kill();

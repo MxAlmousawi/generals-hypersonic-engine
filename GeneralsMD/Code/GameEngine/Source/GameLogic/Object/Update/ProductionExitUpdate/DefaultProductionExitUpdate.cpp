@@ -80,6 +80,10 @@ void DefaultProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDoorTyp
 
 		// make sure the point is on the terrain
 		loc.Z = TheTerrainLogic ? TheTerrainLogic->getLayerHeight( loc.X, loc.Y, creationObject->getLayer() ) : 0.0f;
+		// Hypersonic @feature (D-253): an aircraft (the Gaza) leaves this building already in the air: UnitCreatePoint's
+		// Z is its height above the terrain (every other unit keeps the terrain height, as before).
+		if( newObj->isKindOf( KINDOF_AIRCRAFT ) )
+			loc.Z += md->m_unitCreatePoint.z;
 
 		// we need it in Coord3D form
 		createPoint.x = loc.X;

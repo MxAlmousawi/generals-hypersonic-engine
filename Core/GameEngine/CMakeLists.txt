@@ -72,6 +72,7 @@ set(GAMEENGINE_SRC
     Include/Common/MapObject.h
     Include/Common/MapReaderWriterInfo.h
     Include/Common/MessageStream.h
+    Include/Common/HangWatch.h
     Include/Common/MiniDumper.h
     Include/Common/MiniLog.h
     Include/Common/MiscAudio.h
@@ -665,6 +666,7 @@ set(GAMEENGINE_SRC
 #    Source/Common/System/List.cpp
     Source/Common/System/LocalFile.cpp
     Source/Common/System/LocalFileSystem.cpp
+    Source/Common/System/HangWatch.cpp
     Source/Common/System/MiniDumper.cpp
     Source/Common/System/ObjectStatusTypes.cpp
 #    Source/Common/System/QuotedPrintable.cpp
@@ -1171,6 +1173,16 @@ else()
     )
 endif()
 
+
+# Hypersonic D-244: build the committed RNG source from an external snapshot so
+# the owner's uncommitted Android diagnostics never need to be touched/stashed.
+if(HYPERSONIC_RANDOMVALUE_SOURCE)
+    if(NOT EXISTS "${HYPERSONIC_RANDOMVALUE_SOURCE}")
+        message(FATAL_ERROR "Missing clean RandomValue source: ${HYPERSONIC_RANDOMVALUE_SOURCE}")
+    endif()
+    list(REMOVE_ITEM GAMEENGINE_SRC Source/Common/RandomValue.cpp)
+    list(APPEND GAMEENGINE_SRC "${HYPERSONIC_RANDOMVALUE_SOURCE}")
+endif()
 
 add_library(corei_gameengine_private INTERFACE)
 add_library(corei_gameengine_public INTERFACE)

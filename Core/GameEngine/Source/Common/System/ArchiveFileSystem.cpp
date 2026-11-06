@@ -51,6 +51,8 @@
 #include "Common/AsciiString.h"
 #include "Common/PerfTimer.h"
 
+#include <algorithm>
+
 
 //----------------------------------------------------------------------------
 //         Externals
@@ -220,6 +222,7 @@ void ArchiveFileSystem::loadMods()
 			DEBUG_LOG(("ArchiveFileSystem::loadMods - loading %s into the directory tree.", TheGlobalData->m_modBIG.str()));
 			loadIntoDirectoryTree(archiveFile, TRUE);
 			m_archiveFileMap[TheGlobalData->m_modBIG] = archiveFile;
+			m_modArchives.push_back(archiveFile);	// Hypersonic @feature (D-134)
 			DEBUG_LOG(("ArchiveFileSystem::loadMods - %s inserted into the archive file map.", TheGlobalData->m_modBIG.str()));
 		}
 		else
@@ -230,10 +233,26 @@ void ArchiveFileSystem::loadMods()
 
 	if (TheGlobalData->m_modDir.isNotEmpty())
 	{
+		// Hypersonic @feature (D-134) remember which archives the mod folder added
+		std::vector<ArchiveFile*> before;
+		for (ArchiveFileMap::const_iterator it = m_archiveFileMap.begin(); it != m_archiveFileMap.end(); ++it)
+			before.push_back(it->second);
 		MAYBE_UNUSED Bool ret = loadBigFilesFromDirectory(TheGlobalData->m_modDir, "*.big", TRUE);
 		(void)ret;
+		for (ArchiveFileMap::const_iterator added = m_archiveFileMap.begin(); added != m_archiveFileMap.end(); ++added)
+			if (std::find(before.begin(), before.end(), added->second) == before.end())
+				m_modArchives.push_back(added->second);
 		DEBUG_ASSERTLOG(ret, ("loadBigFilesFromDirectory(%s) returned FALSE!", TheGlobalData->m_modDir.str()));
 	}
+}
+
+// Hypersonic @feature (D-134) see ArchiveFileSystem.h
+Bool ArchiveFileSystem::isFileInModArchive(const Char *filename) const
+{
+	if (m_modArchives.empty() || filename == nullptr)
+		return FALSE;
+	ArchiveFile *archive = getArchiveFile(AsciiString(filename));
+	return archive != nullptr && std::find(m_modArchives.begin(), m_modArchives.end(), archive) != m_modArchives.end();
 }
 
 Bool ArchiveFileSystem::doesFileExist(const Char *filename, FileInstance instance) const

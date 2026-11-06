@@ -40,6 +40,25 @@
 
 #include "Win32Device/Common/Win32BIGFile.h"
 #include "Win32Device/Common/Win32BIGFileSystem.h"
+#include "Common/WorkingDirectory.h"
+
+#if RTS_ZEROHOUR
+// Hypersonic @feature (D-134) TRUE when this start loads the mod with -mod or from a Hypersonic.big next to the exe
+// (decided before the command line is parsed for the engine, since the archives load first).
+static Bool hypersonicModRequested()
+{
+	for (int i = 1; i < __argc; ++i)
+		if (stricmp(__argv[i], "-mod") == 0)
+			return TRUE;
+	Char path[_MAX_PATH];
+	if (!rts::WorkingDirectory::getExecutableDirectory(path, ARRAY_SIZE(path))
+		|| strlen(path) + strlen("Hypersonic.big") >= ARRAY_SIZE(path))
+		return FALSE;
+	strcat(path, "Hypersonic.big");
+	const DWORD attr = ::GetFileAttributesA(path);
+	return attr != (DWORD)-1 && (attr & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+#endif
 #include "Utility/endian_compat.h"
 
 
@@ -221,6 +240,14 @@ Bool Win32BIGFileSystem::loadBigFilesFromDirectory(AsciiString dir, AsciiString 
 		// English, Chinese, and Korean SKUs shipped with two INIZH.big files (one in Run directory, one in Run\Data\INI).
 		// The DeleteFile cleanup doesn't work on EA App/Origin installs because the folder is not writable, so we skip loading it instead.
 		if (it->endsWithNoCase("Data\\INI\\INIZH.big") || it->endsWithNoCase("Data/INI/INIZH.big")) {
+			it++;
+			continue;
+		}
+		// Hypersonic @feature (D-134) a leftover game-folder install (before D-134, or the Android layout) would load
+		// next to the -mod archive: INI directories take the union, so skip it when the mod comes from -mod.
+		if ((it->endsWithNoCase("\\!Hypersonic.big") || it->endsWithNoCase("/!Hypersonic.big")
+			|| it->compareNoCase("!Hypersonic.big") == 0) && hypersonicModRequested()) {
+			DEBUG_LOG(("Win32BIGFileSystem::loadBigFilesFromDirectory - skipping leftover %s (the mod is loaded with -mod)", (*it).str()));
 			it++;
 			continue;
 		}

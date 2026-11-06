@@ -55,6 +55,7 @@ public:
 	void setScreenEdgeScrollMode(ScreenEdgeScrollMode mode);
 
 	void resetModes(); //Used when disabling input, so when we reenable it we aren't stuck in a mode.
+	void flushZoomOutChange(); ///< Hypersonic (D-258): save and announce a pending Ctrl + wheel change now
 
 private:
 	enum
@@ -83,8 +84,15 @@ private:
 	ScrollType m_scrollType;
 	ScreenEdgeScrollMode m_screenEdgeScrollMode;
 	UnsignedInt m_lastMouseMoveTimeMsec;				// real-time in milliseconds when mouse last moved
+	// Hypersonic @feature (Generals Hypersonic D-258): Ctrl + mouse wheel changes the camera zoom-out limit
+	Real m_zoomOutWheelSpin;						// wheel notches not yet applied (touchpads send fractions)
+	Bool m_zoomOutChangePending;				// a change still to be saved and announced
+	Real m_zoomOutPendingHeight;				// the chosen limit (a new game may reset MaxCameraHeight before the save)
+	UnsignedInt m_zoomOutChangeTimeMsec;		// real-time of the last change
 
 	void setScrolling( ScrollType scrollType );
+	Bool canChangeZoomOut() const;
+	void changeZoomOut( Real height );
 	void stopScrolling();
 	Bool canScrollAtScreenEdge() const;
 };

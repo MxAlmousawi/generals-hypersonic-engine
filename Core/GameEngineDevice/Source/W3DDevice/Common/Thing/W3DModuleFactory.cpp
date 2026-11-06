@@ -48,6 +48,9 @@
 #include "W3DDevice/GameClient/Module/W3DTracerDraw.h"
 #include "W3DDevice/GameClient/Module/W3DTreeDraw.h"
 #include "W3DDevice/GameClient/Module/W3DPropDraw.h"
+#if RTS_ZEROHOUR
+#include "W3DDevice/GameClient/Module/W3DLaunchRackDraw.h"
+#endif
 
 //-------------------------------------------------------------------------------------------------
 /** Initialize method */
@@ -81,6 +84,9 @@ void W3DModuleFactory::init()
 #if !(RTS_GENERALS && RETAIL_COMPATIBLE_CRC)
 	addModule( W3DTreeDraw );
 	addModule( W3DPropDraw );
+#endif
+#if RTS_ZEROHOUR
+	addModule( W3DLaunchRackDraw );	// Hypersonic @feature aiming launchers (D-039)
 #endif
 
 }

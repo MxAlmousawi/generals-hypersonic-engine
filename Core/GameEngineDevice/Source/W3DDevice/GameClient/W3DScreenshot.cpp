@@ -234,3 +234,87 @@ void W3D_TakeCompressedScreenshot(ScreenshotFormat format, Int jpegQuality)
 		delete threadData;
 	}
 }
+
+// Hypersonic @feature (Generals Hypersonic D-049) Dev test harness: write a note next to a screenshot that failed.
+void W3D_ScreenshotFailed(const char* pngPath, const char* why)
+{
+	char errPath[_MAX_PATH];
+	strlcpy(errPath, pngPath, ARRAY_SIZE(errPath));
+	strlcat(errPath, ".err.txt", ARRAY_SIZE(errPath));
+	FILE* file = fopen(errPath, "w");
+	if (file)
+	{
+		fputs(why, file);
+		fclose(file);
+	}
+}
+
+// Hypersonic @feature (Generals Hypersonic D-049) Dev test harness: save the back buffer as a PNG at pngPath,
+// synchronously, so every screenshot is on disk before the harness quits the game.
+void W3D_TakeScreenshotToFile(const char* pngPath)
+{
+	SurfaceClass* surface = DX8Wrapper::_Get_DX8_Back_Buffer();
+	if (surface == nullptr)
+	{
+		W3D_ScreenshotFailed(pngPath, "no back buffer");
+		return;
+	}
+	SurfaceClass::SurfaceDescription surfaceDesc;
+	surface->Get_Description(surfaceDesc);
+
+	const bool is32Bit = surfaceDesc.Format == WW3D_FORMAT_A8R8G8B8 || surfaceDesc.Format == WW3D_FORMAT_X8R8G8B8;
+	const bool is16Bit = surfaceDesc.Format == WW3D_FORMAT_R5G6B5;
+	if (!is32Bit && !is16Bit)
+	{
+		W3D_ScreenshotFailed(pngPath, "unsupported back buffer format");
+		surface->Release_Ref();
+		return;
+	}
+
+	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (DX8Wrapper::_Create_DX8_Surface(surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format)));
+	DX8Wrapper::_Copy_DX8_Rects(surface->Peek_D3D_Surface(), nullptr, 0, surfaceCopy->Peek_D3D_Surface(), nullptr);
+	surface->Release_Ref();
+	surface = nullptr;
+
+	int pitch = 0;
+	const unsigned char* bits = static_cast<const unsigned char*>(surfaceCopy->Lock(&pitch));
+	if (bits == nullptr)
+	{
+		W3D_ScreenshotFailed(pngPath, "cannot lock the copy");
+		surfaceCopy->Release_Ref();
+		return;
+	}
+
+	const unsigned int width = surfaceDesc.Width;
+	const unsigned int height = surfaceDesc.Height;
+	unsigned char* image = new unsigned char[3 * width * height];
+	for (unsigned int y = 0; y < height; ++y)
+	{
+		for (unsigned int x = 0; x < width; ++x)
+		{
+			const unsigned int index = 3 * (x + y * width);
+			if (is32Bit)
+			{
+				const unsigned int argb = reinterpret_cast<const unsigned int*>(bits + y * pitch)[x];
+				image[index + 0] = (unsigned char)(argb >> 16);
+				image[index + 1] = (unsigned char)(argb >> 8);
+				image[index + 2] = (unsigned char)(argb >> 0);
+			}
+			else
+			{
+				const unsigned short rgb = reinterpret_cast<const unsigned short*>(bits + y * pitch)[x];
+				image[index + 0] = (unsigned char)((rgb & 0xF800) >> 8);
+				image[index + 1] = (unsigned char)((rgb & 0x07E0) >> 3);
+				image[index + 2] = (unsigned char)((rgb & 0x001F) << 3);
+			}
+		}
+	}
+	surfaceCopy->Unlock();
+	surfaceCopy->Release_Ref();
+
+	if (!stbi_write_png(pngPath, width, height, 3, image, width * 3))
+	{
+		W3D_ScreenshotFailed(pngPath, "cannot write the file");
+	}
+	delete[] image;
+}

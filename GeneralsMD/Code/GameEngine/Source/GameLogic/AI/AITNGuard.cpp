@@ -373,6 +373,9 @@ static Object *TunnelNetworkScan(Object *owner)
 //--------------------------------------------------------------------------------------
 StateReturnType AITNGuardInnerState::update()
 {
+	// Hypersonic @bugfix (D-190) onEnter leaves no attack state when the nemesis is already gone (a unit killed by
+	// an Iran strike): stock AIGuard*State::update checks this, the tunnel guard did not (crash, 2026-10-19)
+	if (m_attackState == nullptr) return STATE_SUCCESS;
 	Object* nemesis = TheGameLogic->findObjectByID(getGuardMachine()->getNemesisID()) ;
 	Player *ownerPlayer = getMachineOwner()->getControllingPlayer();
 	TunnelTracker *tunnels = nullptr;
@@ -501,6 +504,9 @@ StateReturnType AITNGuardOuterState::onEnter()
 //--------------------------------------------------------------------------------------
 StateReturnType AITNGuardOuterState::update()
 {
+	// Hypersonic @bugfix (D-190) onEnter leaves no attack state when the nemesis is already gone (a unit killed by
+	// an Iran strike): stock AIGuard*State::update checks this, the tunnel guard did not (crash, 2026-10-19)
+	if (m_attackState == nullptr) return STATE_SUCCESS;
 	Object *owner = getMachineOwner();
 	Object* goalObj = m_attackState->getMachineGoalObject();
 	if (goalObj)
@@ -838,6 +844,9 @@ StateReturnType AITNGuardAttackAggressorState::onEnter()
 //-------------------------------------------------------------------------------------------------
 StateReturnType AITNGuardAttackAggressorState::update()
 {
+	// Hypersonic @bugfix (D-190) onEnter leaves no attack state when the nemesis is already gone (a unit killed by
+	// an Iran strike): stock AIGuard*State::update checks this, the tunnel guard did not (crash, 2026-10-19)
+	if (m_attackState == nullptr) return STATE_SUCCESS;
 	if (m_attackState->getMachine()->getCurrentStateID() == AttackStateMachine::FIRE_WEAPON) {
 		Object *nemesis = TheGameLogic->findObjectByID(getGuardMachine()->getNemesisID());
 		Player *ownerPlayer = getMachineOwner()->getControllingPlayer();

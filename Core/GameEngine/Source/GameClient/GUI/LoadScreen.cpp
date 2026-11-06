@@ -1294,6 +1294,10 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 			portrait = TheMappedImageCollection->findImageByName("SUFactionLogoLg_GLA");
 		else if (pt->getName() == "FactionChina")
 			portrait = TheMappedImageCollection->findImageByName("SNFactionLogoLg_China");
+		// Hypersonic @feature Iran faction UI (Generals Hypersonic D-095, D-218): the large steel emblem, like the stock
+		// factions' large logos (D-095 showed a commander portrait)
+		else if (pt->getName() == "FactionIran")
+			portrait = TheMappedImageCollection->findImageByName("IR_FactionLogoLg");
 		else
 			DEBUG_CRASH(("Unexpected player template"));
 
@@ -1559,6 +1563,10 @@ GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 			portrait = TheMappedImageCollection->findImageByName("SUFactionLogo144_GLA");
 		else if (pt->getName() == "FactionChina")
 			portrait = TheMappedImageCollection->findImageByName("SNFactionLogo144_China");
+		// Hypersonic @feature Iran faction UI (Generals Hypersonic D-095, D-218): the steel emblem, like the stock
+		// factions' 144 logos (D-095 showed a commander portrait)
+		else if (pt->getName() == "FactionIran")
+			portrait = TheMappedImageCollection->findImageByName("IR_FactionLogo144");
 		else
 			DEBUG_CRASH(("Unexpected player template"));
 

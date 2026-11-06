@@ -139,6 +139,12 @@ public:
 
 	void validate();
 
+	// Hypersonic @feature read access for the SAM lead-intercept profile (Generals Hypersonic D-038)
+	Real getMaxSpeed() const { return m_maxSpeed; }
+	Real getAcceleration() const { return m_acceleration; }
+	Real getCirclingRadius() const { return m_circlingRadius; } // D-246 fixed guard reach
+	LocomotorAppearance getAppearance() const { return m_appearance; }
+
 protected:
 
 
@@ -314,6 +320,9 @@ public:
 	void setMaxAcceleration(Real accel) { m_maxAccel = accel; }
 	void setMaxBraking(Real braking) { m_maxBraking = braking; }
 	void setMaxTurnRate(Real turn) { m_maxTurnRate = turn; }
+	/// Hypersonic @feature terminal steering (D-228): factor on the turn rate, beyond the template's; set every frame by
+	/// its owner before the move (MissileAIUpdate TerminalTurnBoost), so it is not saved. 1 = none.
+	void setTurnRateBoost(Real factor) { m_turnRateBoost = factor; }
 	void setAllowInvalidPosition(Bool allow) { setFlag(ALLOW_INVALID_POSITION, allow); }
 	void setCloseEnoughDist( Real dist ) { m_closeEnoughDist = dist; }
 	void setCloseEnoughDist3D( Bool setting ) { setFlag(IS_CLOSE_ENOUGH_DIST_3D, setting); }
@@ -448,6 +457,7 @@ private:
 	Real				m_maxAccel;
 	Real				m_maxBraking;
 	Real				m_maxTurnRate;
+	Real				m_turnRateBoost;		///< Hypersonic @feature (D-228), see setTurnRateBoost
 	Real				m_closeEnoughDist;
 #ifdef CIRCLE_FOR_LANDING
 	Real				m_circleThresh;

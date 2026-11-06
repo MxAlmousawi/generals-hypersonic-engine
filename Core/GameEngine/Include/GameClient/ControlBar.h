@@ -416,7 +416,8 @@ enum {
 			};
 enum { MAX_STRUCTURE_INVENTORY_BUTTONS = 10 }; // there are this many physical buttons in "inventory" windows for structures
 enum { MAX_BUILD_QUEUE_BUTTONS = 9 };// physical button count for the build queue
-enum { MAX_SPECIAL_POWER_SHORTCUTS = 11};
+// Hypersonic @feature Iran has 14 side-bar buttons (8 powers + 6 launch buttons, D-040); stock bars use at most 11.
+enum { MAX_SPECIAL_POWER_SHORTCUTS = 16};
 class CommandSet : public Overridable
 {
 
@@ -649,6 +650,7 @@ enum ControlBarStages CPP_11(: Int)
 //-------------------------------------------------------------------------------------------------
 class ControlBar : public SubsystemInterface
 {
+	friend class HypersonicScenario;	///< Hypersonic (D-246 test harness): presses command buttons the player's way
 
 public:
 
@@ -786,6 +788,10 @@ public:
 
 	void drawSpecialPowerShortcutMultiplierText();
 
+	// Hypersonic @feature Launch buttons stay in targeting mode for a salvo (D-046). Client-side only.
+	static Bool isStickyLaunchCommand( const CommandButton *command );	///< a MunitionLaunchPower button
+	static Int countReadyLaunches( const CommandButton *command );		///< ready munitions that button can fire
+
 protected:
 	void updateRadarAttackGlow ();
 
@@ -870,6 +876,22 @@ protected:
 	// the following methods do command processing for GUI selections
 	CBCommandStatus processCommandUI( GameWindow *control, GadgetGameMessage gadgetMessage );
 	CBCommandStatus processCommandTransitionUI( GameWindow *control, GadgetGameMessage gadgetMessage );
+
+	// Hypersonic @feature hold to repeat-buy (Generals Hypersonic D-096)
+	// Holding the left mouse button on a unit-build button buys repeatedly: the press buys one, as
+	// any click does (ControlBar.wnd buttons trigger ON_MOUSE_DOWN); still held over the button after
+	// REPEAT_BUILD_DELAY_MS it is pressed again, then every REPEAT_BUILD_INTERVAL_MS, until the button
+	// is released, the cursor leaves it, the button/factory/selection changes or a press is refused.
+	// Each repeat is a GWM_LEFT_DOWN on the button, the input a click delivers. Client-side UI only.
+	void noteRepeatBuildPress( GameWindow *control, const CommandButton *commandButton,
+														 const Object *factory, Bool accepted );	///< from processCommandUI (GUI_COMMAND_UNIT_BUILD)
+	void updateRepeatBuild();				///< from update(): sends the due repeat press
+	void stopRepeatBuild();
+	GameWindow *m_repeatBuildWindow;				///< the unit-build command window being held, or null
+	const CommandButton *m_repeatBuildButton;	///< the button it showed at the press
+	ObjectID m_repeatBuildFactory;					///< the factory selected at the press
+	UnsignedInt m_repeatBuildNextMs;				///< timeGetTime() when the next repeat press is due
+	Bool m_repeatBuildSending;							///< a repeat press is being delivered right now
 
 	// methods to help out with each context
 	void updateConstructionTextDisplay( Object *obj );

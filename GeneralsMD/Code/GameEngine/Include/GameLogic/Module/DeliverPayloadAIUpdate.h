@@ -333,7 +333,8 @@ public:
 	Bool isOffMap() const;
 	Real calcMinTurnRadius(Real* timeToTravelThatDist) const;
 
-	void deliverPayload( const Coord3D *moveToPos, const Coord3D *targetPos, const DeliverPayloadData *data );
+	// Hypersonic @feature decalPos (Generals Hypersonic D-221): where the delivery decal is drawn (default: targetPos)
+	void deliverPayload( const Coord3D *moveToPos, const Coord3D *targetPos, const DeliverPayloadData *data, const Coord3D *decalPos = nullptr );
 	void deliverPayloadViaModuleData( const Coord3D *moveToPos );
 
 	const DeliverPayloadData* getData() { return &m_data; }

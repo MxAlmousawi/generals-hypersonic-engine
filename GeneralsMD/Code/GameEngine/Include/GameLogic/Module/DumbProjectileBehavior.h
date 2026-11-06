@@ -53,6 +53,10 @@ public:
 	Real m_secondHeight;				///< And the second, this.
 	Real m_firstPercentIndent;	///< The first point will be this percent along the target line
 	Real m_secondPercentIndent;	///< And the second, this.
+	// Hypersonic @feature (Generals Hypersonic D-062): instead of the Bezier curve, a ballistic drop from the start to the
+	// end: level at the start, then falling like a thrown body (horizontal progress even in time, height falling with the
+	// square of the time), in the vertical plane through both points (a straight line seen from above).
+	Bool m_ballisticDrop;
 	UnsignedInt m_maxLifespan;
 	Bool m_tumbleRandomly;
 	Bool m_orientToFlightPath;
@@ -94,6 +98,9 @@ public:
 	virtual ObjectID projectileGetLauncherID() const override { return m_launcherID; }
 	virtual void setFramesTillCountermeasureDiversionOccurs( UnsignedInt frames ) override {}
 	virtual void projectileNowJammed() override {}
+	virtual void projectileSetFlightFrames(UnsignedInt frames) override;	///< Hypersonic @feature (D-062)
+	virtual void projectileSetStartVerticalSpeed(Real vz) override;			///< Hypersonic @feature (D-162)
+	virtual void projectileSetStartHorizontalSpeed(Real vx, Real vy) override;	///< Hypersonic @feature (D-267)
 
 protected:
 
@@ -112,6 +119,9 @@ private:
 	Real									m_flightPathSpeed;				///< flight path speed (in case we must regen it)
 	Int										m_flightPathSegments;			///< number of segments in the flightpath (in case we must regen it)
 	Int										m_currentFlightPathStep;	///< Our current index in the flight path vector.  Quicker than popping off.
+	Real									m_ballisticStartVZ;				///< Hypersonic @feature (D-162) BallisticDrop: vertical speed at the start (dist/frame)
+	Real									m_ballisticStartVX;				///< Hypersonic @feature (D-267) BallisticDrop: horizontal speed at the start (dist/frame; 0, 0: even progress)
+	Real									m_ballisticStartVY;
 	WeaponBonusConditionFlags		m_extraBonusFlags;
 
   Bool                  m_hasDetonated;           ///<

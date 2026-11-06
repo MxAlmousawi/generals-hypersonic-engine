@@ -40,6 +40,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/PerfTimer.h"
+#include "Common/Player.h"
 #include "Common/Team.h"
 #include "Common/Xfer.h"
 #include "Common/ThingTemplate.h"
@@ -199,6 +200,24 @@ AIGuardMachine::~AIGuardMachine()
 {
 }
 
+// Hypersonic (owner 2026-10-20: "units should guard the base and its surroundings"; "I just wanted to hit the units
+// when targeting buildings ... long range Tomahawks"): an Iran computer player's unit guarding a base area (the skirmish
+// AI's staged teams guard [Skirmish]MyOuterPerimeter) also takes on enemies around it, up to IRAN_GUARD_SURROUND times
+// the area's radius from its centre, not only enemies inside the polygon: artillery and raiders hitting the base from
+// just outside the perimeter were ignored while the army stood by. (2026-10-20: engaging only the enemies attacking a
+// building around the base lost the 3v3 at 29 min, v39; engaging all of them won it at 47 min, v38.)
+static const Real IRAN_GUARD_SURROUND = 1.15f;	// owner 2026-10-20: 1.5, then 1.25, then "maybe 15 percent is enough"
+
+// Only base areas (a start's inner/outer perimeter: my base or an ally's I help), not the mid-map 'CombatZone'.
+static Bool isIranAIAreaGuard(const Object *obj, const PolygonTrigger *area)
+{
+	const Player *player = obj ? obj->getControllingPlayer() : nullptr;
+	if (area == nullptr || player == nullptr || player->getPlayerType() != PLAYER_COMPUTER || player->getSide() != "Iran")
+		return false;
+	const AsciiString &name = area->getTriggerName();
+	return name.startsWith("OuterPerimeter") || name.startsWith("InnerPerimeter");
+}
+
 //--------------------------------------------------------------------------------------
 /*static*/ Real AIGuardMachine::getStdGuardRange(const Object* obj)
 {
@@ -272,7 +291,13 @@ Bool AIGuardMachine::lookForInnerTarget()
 
 	Real visionRange = AIGuardMachine::getStdGuardRange(owner);
 
-	if (area)
+	if (area && isIranAIAreaGuard(owner, area))
+	{
+		// Hypersonic: the area and its surroundings (no polygon filter, so scan on every guard scan)
+		visionRange = area->getRadius() * IRAN_GUARD_SURROUND;
+		area->getCenterPoint(&pos);
+	}
+	else if (area)
 	{
 		UnsignedInt checkFrame = TheGameLogic->getFrameObjectsChangedTriggerAreas()+TheAI->getAiData()->m_guardEnemyScanRate;
 		if (TheGameLogic->getFrame()>checkFrame) {
@@ -546,8 +571,11 @@ StateReturnType AIGuardOuterState::onEnter()
 	const PolygonTrigger *area = getGuardMachine()->getAreaToGuard();
 	if (area)
 	{
-		if (range < area->getRadius())
-			range = area->getRadius();
+		Real areaRange = area->getRadius();
+		if (isIranAIAreaGuard(obj, area))
+			areaRange *= IRAN_GUARD_SURROUND;	// Hypersonic: chase within the surroundings it scans
+		if (range < areaRange)
+			range = areaRange;
 		area->getCenterPoint(&pos);
 	}
 	m_exitConditions.m_center = pos;

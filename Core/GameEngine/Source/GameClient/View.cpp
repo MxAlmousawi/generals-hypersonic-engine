@@ -129,6 +129,20 @@ void View::zoom( Real height )
 	setHeightAboveGround(getHeightAboveGround() + height);
 }
 
+// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): the limit keeps a map script's scale
+// (setDefaultView's maxHeight factor), a camera above a lowered limit comes down to it
+void View::applyMaxCameraHeightChange( Real oldMax, Real newMax )
+{
+	if( oldMax > 0.0f )
+		m_maxHeightAboveGround *= newMax / oldMax;
+	else
+		m_maxHeightAboveGround = newMax;
+	if( m_maxHeightAboveGround < m_minHeightAboveGround )
+		m_maxHeightAboveGround = m_minHeightAboveGround;
+	if( m_heightAboveGround > m_maxHeightAboveGround )
+		m_heightAboveGround = m_maxHeightAboveGround;
+}
+
 /**
  * Center the view on the given coordinate.
  */

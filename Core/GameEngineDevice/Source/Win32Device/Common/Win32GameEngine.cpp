@@ -32,6 +32,7 @@
 #include <windows.h>
 
 #include "Win32Device/Common/Win32GameEngine.h"
+#include "Common/HangWatch.h"
 #include "Common/PerfTimer.h"
 
 #include "GameNetwork/LANAPICallbacks.h"
@@ -95,6 +96,7 @@ void Win32GameEngine::update()
 		while (ApplicationHWnd && ::IsIconic(ApplicationHWnd)) {
 			// We are alt-tabbed out here.  Sleep a bit, & process windows
 			// so that we can become un-alt-tabbed out.
+			HangWatch::idleHeartbeat(); // Hypersonic @feature (D-274) Being minimized is not a hang.
 			Sleep(5);
 			serviceWindowsOS();
 
@@ -115,12 +117,14 @@ void Win32GameEngine::update()
 
     // When we are alt-tabbed out... the MilesAudioManager seems to go into a coma sometimes
     // and not regain focus properly when we come back. This seems to wake it up nicely.
+    HangWatch::setStage(HangWatch::Stage_Audio); // Hypersonic @feature (D-274)
     AudioAffect aa = (AudioAffect)0x10;
 		TheAudio->setVolume(TheAudio->getVolume( aa ), aa );
 
 	}
 
 	// allow windows to perform regular windows maintenance stuff like msgs
+	HangWatch::setStage(HangWatch::Stage_WindowsMessages); // Hypersonic @feature (D-274)
 	serviceWindowsOS();
 
 }

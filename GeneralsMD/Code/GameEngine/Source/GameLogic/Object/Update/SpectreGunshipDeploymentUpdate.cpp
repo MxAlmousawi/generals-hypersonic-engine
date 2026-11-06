@@ -69,6 +69,7 @@
 SpectreGunshipDeploymentUpdateModuleData::SpectreGunshipDeploymentUpdateModuleData()
 {
 	m_specialPowerTemplate			   = nullptr;
+	m_gunshipSpecialPowerTemplate	 = nullptr; // Hypersonic @feature (D-200)
 	m_extraRequiredScience				 = SCIENCE_INVALID;
 /******BOTH*******//*BOTH*//******BOTH*******//******BOTH*******/  m_attackAreaRadius             = 200.0f;
 	m_createLoc = CREATE_GUNSHIP_AT_EDGE_FARTHEST_FROM_TARGET;
@@ -100,6 +101,8 @@ static Real zero = 0.0f;
 /******BOTH*******/   { "SpecialPowerTemplate",     INI::parseSpecialPowerTemplate,   nullptr, offsetof( SpectreGunshipDeploymentUpdateModuleData, m_specialPowerTemplate ) },
 /*******BOTH******/		{ "AttackAreaRadius",	        INI::parseReal,				            nullptr, offsetof( SpectreGunshipDeploymentUpdateModuleData, m_attackAreaRadius ) },
 		{ "CreateLocation", INI::parseIndexList, TheGunshipCreateLocTypeNames, offsetof( SpectreGunshipDeploymentUpdateModuleData, m_createLoc ) },
+		// Hypersonic @feature (D-200)
+		{ "GunshipSpecialPowerTemplate", INI::parseSpecialPowerTemplate, nullptr, offsetof( SpectreGunshipDeploymentUpdateModuleData, m_gunshipSpecialPowerTemplate ) },
 
     { nullptr, nullptr, nullptr, 0 }
 	};
@@ -225,7 +228,9 @@ Bool SpectreGunshipDeploymentUpdate::initiateIntentToDoSpecialPower(const Specia
     m_gunshipID = newGunship->getID();
 
     // FIRE THE SPECIAL POWER OF THE GUNSHIP
-	  SpecialPowerModuleInterface *shipSPMInterface = newGunship->getSpecialPowerModule( specialPowerTemplate );
+	  // Hypersonic @feature (D-200) the gunship may fly its own (script-only) sortie power, see the module data
+	  const SpecialPowerTemplate *shipPowerTemplate = data->m_gunshipSpecialPowerTemplate ? data->m_gunshipSpecialPowerTemplate : specialPowerTemplate;
+	  SpecialPowerModuleInterface *shipSPMInterface = newGunship->getSpecialPowerModule( shipPowerTemplate );
 	  if( shipSPMInterface )
 	  {
 		  SpecialPowerModule *spModule = (SpecialPowerModule*)shipSPMInterface;

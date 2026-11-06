@@ -42,6 +42,7 @@
 #include "GameClient/FXList.h"
 #include "GameClient/InGameUI.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/HypersonicScenario.h"
 #include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Module/InstantDeathBehavior.h"
 #include "GameLogic/Module/AIUpdate.h"
@@ -172,6 +173,15 @@ void InstantDeathBehavior::onDie( const DamageInfo *damageInfo )
 			const WeaponTemplateVec& v = d->m_weapons;
 			DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
 			const WeaponTemplate* wt = v[idx];
+			// Hypersonic @feature (D-148 test) a "<weapon> None" list is a cook-off roll (D-142): the harness reports it
+			if (TheHypersonicScenario != nullptr)
+			{
+				Bool isRoll = FALSE;
+				for (size_t i = 0; i < listSize; ++i)
+					isRoll = isRoll || v[i] == nullptr;
+				if (isRoll)
+					TheHypersonicScenario->noteCookOff(getObject()->getTemplate()->getName().str(), getObject()->getPosition(), wt != nullptr);
+			}
 			if (wt)
 			{
 				TheWeaponStore->createAndFireTempWeapon(wt, getObject(), getObject()->getPosition());

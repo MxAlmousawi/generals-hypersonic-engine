@@ -93,6 +93,18 @@ enum EvaMessage CPP_11(: Int)
 	EVA_SuperweaponLaunched_Own_Sneak_Attack,
   EVA_SuperweaponLaunched_Ally_Sneak_Attack,
   EVA_SuperweaponLaunched_Enemy_Sneak_Attack,
+	// Hypersonic @feature (D-163) the Khorramshahr's launch for allies and enemies (SpecialPower EvaLaunchedAlly/Enemy)
+	EVA_SuperweaponLaunched_Ally_Khorramshahr,
+	EVA_SuperweaponLaunched_Enemy_Khorramshahr,
+	// Hypersonic @feature (D-163) the Khorramshahr's own "ready" and its "detected" for enemies (SpecialPower EvaReadyOwn,
+	// EvaDetectedEnemy)
+	EVA_SuperweaponReady_Own_Khorramshahr,
+	EVA_SuperweaponDetected_Enemy_Khorramshahr,
+	// Hypersonic @feature (D-232) the Khorramshahr's "ready" for enemies (SpecialPower EvaReadyEnemy), and Kaveh's
+	// stealth detection (StealthUpdate EnemyDetectionEvaEvent / OwnDetectionEvaEvent), like Colonel Burton's
+	EVA_SuperweaponReady_Enemy_Khorramshahr,
+	EVA_EnemyKavehDetected,
+	EVA_OwnKavehDetected,
 
 	EVA_COUNT,
 	EVA_FIRST = 0,

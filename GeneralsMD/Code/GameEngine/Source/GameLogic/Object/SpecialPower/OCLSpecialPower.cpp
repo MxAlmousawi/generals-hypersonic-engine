@@ -155,6 +155,11 @@ void OCLSpecialPower::doSpecialPowerAtLocation( const Coord3D *loc, Real angle, 
 	if( loc == nullptr )
 		return;
 
+	// Hypersonic @feature (D-163) refuse a target inside the power's MinimumRange (scripts, AI and network
+	// commands included; the cursor refuses it already)
+	if( !isValidTargetLocation( loc ) )
+		return;
+
 	// get the module data
 	const OCLSpecialPowerModuleData *modData = getOCLSpecialPowerModuleData();
 

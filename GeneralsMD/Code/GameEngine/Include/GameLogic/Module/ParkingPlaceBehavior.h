@@ -47,6 +47,7 @@ public:
 	Real					m_landingDeckHeightOffset;
 	Bool					m_hasRunways;			// if true, each col has a runway in front of it
 	Bool					m_parkInHangars;	// if true, park at the hangar production spot, not the "real" parking place
+	KindOfMaskType	m_requiredKindOf;	///< Hypersonic (D-246) only aircraft with one of these park here (empty = any)
 
 	ParkingPlaceBehaviorModuleData()
 	{
@@ -59,6 +60,7 @@ public:
 		m_landingDeckHeightOffset = 0.0f;
 		m_hasRunways = false;
 		m_parkInHangars = false;
+		m_requiredKindOf.clear();
 	}
 
 	static void buildFieldParse(MultiIniFieldParse& p)
@@ -70,6 +72,7 @@ public:
 			{ "NumRows",						     INI::parseInt,	 nullptr, offsetof( ParkingPlaceBehaviorModuleData, m_numRows ) },
 			{ "NumCols",						     INI::parseInt,	 nullptr, offsetof( ParkingPlaceBehaviorModuleData, m_numCols ) },
 			{ "ApproachHeight",			     INI::parseReal, nullptr, offsetof( ParkingPlaceBehaviorModuleData, m_approachHeight ) },
+			{ "ParkingRequiredKindOf",	KindOfMaskType::parseFromINI, nullptr, offsetof( ParkingPlaceBehaviorModuleData, m_requiredKindOf ) },	// Hypersonic (D-246)
 			{ "LandingDeckHeightOffset", INI::parseReal, nullptr, offsetof( ParkingPlaceBehaviorModuleData, m_landingDeckHeightOffset ) },
 			{ "HasRunways",					     INI::parseBool, nullptr, offsetof( ParkingPlaceBehaviorModuleData, m_hasRunways ) },
 			{ "ParkInHangars",			     INI::parseBool, nullptr, offsetof( ParkingPlaceBehaviorModuleData, m_parkInHangars ) },
@@ -145,12 +148,17 @@ public:
 	virtual void transferRunwayReservationToNextInLineForTakeoff(ObjectID id) override;
 	virtual Real getApproachHeight() const override { return getParkingPlaceBehaviorModuleData()->m_approachHeight; }
 	virtual Real getLandingDeckHeightOffset() const override { return getParkingPlaceBehaviorModuleData()->m_landingDeckHeightOffset; }
+	virtual Bool hasParkingKindRestriction() const override { return getParkingPlaceBehaviorModuleData()->m_requiredKindOf.any(); }	// Hypersonic (D-246)
+	Bool acceptsAircraft( const ThingTemplate *thing ) const;	///< Hypersonic (D-246) ParkingRequiredKindOf
+	virtual Bool acceptsAircraftType( const ThingTemplate *thing ) const override { return acceptsAircraft( thing ); }
 	virtual void setHealee(Object* healee, Bool add) override;
 	virtual void killAllParkedUnits() override;
 	virtual void defectAllParkedUnits(Team* newTeam, UnsignedInt detectionTime) override;
-	virtual Bool calcBestParkingAssignment( ObjectID id, Coord3D *pos, Int *oldIndex = nullptr, Int *newIndex = nullptr ) override { return FALSE; }
+	virtual Bool calcBestParkingAssignment( ObjectID id, Coord3D *pos, Int *oldIndex = nullptr, Int *newIndex = nullptr ) override;	// Hypersonic @bugfix (D-246)
 	virtual const std::vector<Coord3D>* getTaxiLocations( ObjectID id ) const override { return nullptr; }
 	virtual const std::vector<Coord3D>* getCreationLocations( ObjectID id ) const override { return nullptr; }
+	virtual Int getSpaceCount() const override { return m_gotInfo ? (Int)m_spaces.size() : 0; }	// Hypersonic @feature (D-039)
+	virtual ObjectID getSpaceOccupant( Int index ) const override;	// Hypersonic @feature (D-039)
 
 private:
 
@@ -209,6 +217,7 @@ private:
 	void resetWakeFrame();
 
 	ParkingPlaceInfo* findPPI(ObjectID id);
+	Bool isFlyingAboveSpaces( const Object *obj ) const;	///< Hypersonic @bugfix (D-246) deck-relative for raised decks
 	ParkingPlaceInfo* findEmptyPPI();
 
 	Coord3D m_heliRallyPoint;

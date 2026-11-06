@@ -341,7 +341,8 @@ public:
 	{
 		if (primary)
 		{
-			TheDisplay->createLightPulse(primary, &m_color, 1, m_radius, m_increaseFrames, m_decreaseFrames);
+			// Hypersonic @feature (D-060) a scaled FX scales the light radius
+			TheDisplay->createLightPulse(primary, &m_color, 1, m_radius * FXList::getCurrentScale(), m_increaseFrames, m_decreaseFrames);
 		}
 		else
 		{
@@ -390,7 +391,7 @@ public:
 		if (primary)
 		{
 			if (TheTacticalView)
-				TheTacticalView->shake(primary, m_shake);
+				TheTacticalView->shake(primary, m_shake, FXList::getCurrentScale());	// Hypersonic @feature (D-060) scaled intensity
 		}
 		else
 		{
@@ -454,7 +455,7 @@ public:
 			{
 				scorch = GameClientRandomValue( SCORCH_1, SCORCH_4 );
 			}
-			TheGameClient->addScorch(primary, m_radius, (Scorches)scorch);
+			TheGameClient->addScorch(primary, m_radius * FXList::getCurrentScale(), (Scorches)scorch);	// Hypersonic @feature (D-060)
 		}
 		else
 		{
@@ -593,7 +594,10 @@ protected:
 
 	void reallyDoFX(const Coord3D *primary, const Matrix3D* mtx, const Object* thingToAttachTo, Real overrideRadius ) const
 	{
+		// Hypersonic @feature (D-060) a scaled FX (FXList::ScaleScope) scales the offset, radius and height and the system
+		const Real fxScale = FXList::getCurrentScale();
 		Coord3D offset = m_offset;
+		offset.scale(fxScale);
 		if (mtx)
 		{
 			adjustVector(&offset, mtx);
@@ -609,7 +613,7 @@ protected:
 				if (sys)
 				{
 					Coord3D newPos;
-					Real radius = m_radius.getValue();
+					Real radius = m_radius.getValue() * fxScale;
 					Real angle = GameClientRandomValueReal( 0.0f, 2.0f * PI );
 
 					newPos.x = primary->x + offset.x + radius * cos(angle);
@@ -625,7 +629,7 @@ protected:
 						newPos.z = TheTerrainLogic->getLayerHeight( newPos.x, newPos.y, layer );
 					}
 					else
-						newPos.z += m_height.getValue();
+						newPos.z += m_height.getValue() * fxScale;
 
 
 					if (m_orientToObject && mtx)
@@ -643,6 +647,10 @@ protected:
 						sys->attachToObject(thingToAttachTo);
 					else
 						sys->setPosition( &newPos );
+
+					// Hypersonic @perf (D-060 budget): sizes, speeds and radii scale fully, the particle count at most 1.5x
+					if (fxScale != 1.0f)
+						sys->applyScale(fxScale, min(fxScale, 1.5f));
 
 					Real delayInMsec = m_delay.getValue();
 					if (delayInMsec >= 0.0f)
@@ -778,12 +786,22 @@ static const FieldParse TheFXListFieldParse[] =
 	{ "TerrainScorch",							TerrainScorchFXNugget::parse, nullptr, 0},
 	{ "ParticleSystem",							ParticleSystemFXNugget::parse, nullptr, 0},
 	{ "FXListAtBonePos",						FXListAtBonePosFXNugget::parse, nullptr, 0},
+	{ "ReferenceDamage",						FXList::parseReferenceDamage, nullptr, 0},		// Hypersonic @feature (D-060)
 	{ nullptr, nullptr, nullptr, 0 }
 };
 
 //-------------------------------------------------------------------------------------------------
-FXList::FXList()
+Real FXList::s_currentScale = 1.0f;
+
+FXList::FXList() : m_referenceDamage(0.0f)
 {
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (Generals Hypersonic D-060) ReferenceDamage = <damage>: the blast damage this list is designed for.
+/*static*/ void FXList::parseReferenceDamage(INI *ini, void *instance, void * /*store*/, const void * /*userData*/)
+{
+	((FXList*)instance)->m_referenceDamage = INI::scanReal(ini->getNextToken());
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -800,6 +818,7 @@ void FXList::clear()
 		deleteInstance(*it);
 	}
 	m_nuggets.clear();
+	m_referenceDamage = 0.0f;
 }
 
 //-------------------------------------------------------------------------------------------------

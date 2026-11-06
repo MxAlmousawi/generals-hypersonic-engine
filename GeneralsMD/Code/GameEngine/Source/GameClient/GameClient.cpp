@@ -30,10 +30,12 @@
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 #include "GameClient/GameClient.h"
+#include "GameLogic/HypersonicScenario.h"
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "Common/ActionManager.h"
 #include "Common/GameEngine.h"
+#include "Common/HangWatch.h"
 #include "Common/GameState.h"
 #include "Common/Recorder.h"
 #include "Common/GameUtility.h"
@@ -525,6 +527,10 @@ void GameClient::update()
 	GameMessage *frameMsg = TheMessageStream->appendMessage( GameMessage::MSG_FRAME_TICK );
 	frameMsg->appendTimestampArgument( getFrame() );
 
+	// Hypersonic @feature (D-049) dev test harness: camera, screenshots, quit
+	if (TheHypersonicScenario)
+		TheHypersonicScenario->clientUpdate();
+
 	// Update intro
 	if (m_intro != nullptr)
 	{
@@ -534,6 +540,13 @@ void GameClient::update()
 		{
 			delete m_intro;
 			m_intro = nullptr;
+
+			// Hypersonic @feature (D-049) the dev test harness starts its skirmish instead of the shell
+			if (TheGlobalData->m_hypersonicScenario.isNotEmpty() && TheHypersonicScenario == nullptr)
+			{
+				TheHypersonicScenario = NEW HypersonicScenario;
+				TheHypersonicScenario->startGame();
+			}
 
 			TheShell->showShellMap(TRUE);
 			TheShell->showShell();
@@ -685,6 +698,16 @@ void GameClient::update()
 							ss = OBJECTSHROUD_CLEAR;
 						}
 					}
+					// Hypersonic @feature (Generals Hypersonic D-213): an object with VisibleToOwnerInFog (the ballistic
+					// missiles: no vision of their own) stays drawn for its owner and allies in fog and shroud; it reveals
+					// nothing. Drawing only: the logic's shroud status is unchanged.
+					if (ss >= OBJECTSHROUD_FOGGED && object->getTemplate()->isVisibleToOwnerInFog())
+					{
+						Player *localPlayer = ThePlayerList->getLocalPlayer();
+						if (localPlayer != nullptr && (object->getControllingPlayer() == localPlayer
+							|| localPlayer->getRelationship(object->getTeam()) == ALLIES))
+							ss = OBJECTSHROUD_CLEAR;
+					}
 					draw->setFullyObscuredByShroud(ss >= OBJECTSHROUD_FOGGED);
 				}
 			}
@@ -726,7 +749,9 @@ void GameClient::update()
 	// redraw all views, update the GUI
 	//if(TheGameLogic->getFrame() >= 2)
 
+		HangWatch::setStage(HangWatch::Stage_ClientDraw); // Hypersonic @feature (D-274)
 		TheDisplay->DRAW();
+		HangWatch::setStage(HangWatch::Stage_ClientUi);
 	}
 
 	{

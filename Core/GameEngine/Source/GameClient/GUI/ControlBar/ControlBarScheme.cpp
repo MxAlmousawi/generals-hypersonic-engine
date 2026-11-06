@@ -1086,11 +1086,20 @@ void ControlBarSchemeManager::drawBackground( ICoord2D offset )
 }
 
 //-----------------------------------------------------------------------------
+// Hypersonic @feature (D-281) a Control Bar Pro pack moves the bar's windows, and Iran has no art for that layout, so with
+// the pack installed Iran uses the pack's China bar. Without the pack this changes nothing. UI only: no game logic reads it.
+static void useControlBarPackSide( AsciiString &side )
+{
+	if( side.compareNoCase( "Iran" ) == 0 && TheMappedImageCollection && TheMappedImageCollection->findImageByName( "ChinaProCommandBar" ) )
+		side.set( "China" );
+}
+
 void ControlBarSchemeManager::setControlBarSchemeByPlayerTemplate( const PlayerTemplate *pt, Bool useSmall)
 {
 	if(!pt)
 		return;
 	AsciiString side = pt->getSide();
+	useControlBarPackSide( side );
 	if(useSmall)
 		side.concat("Small");
 	if(m_currentScheme && (m_currentScheme->m_side.compare(side) == 0))
@@ -1161,6 +1170,7 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayer(Player *p)
 	if(!p)
 		return;
 	AsciiString side = p->getSide();
+	useControlBarPackSide( side );
 	if(m_currentScheme && (m_currentScheme->m_side.compare(side) == 0))
 	{
 		m_currentScheme->init();

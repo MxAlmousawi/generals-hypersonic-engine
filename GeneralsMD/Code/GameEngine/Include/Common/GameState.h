@@ -195,7 +195,9 @@ public:
 	Bool isInSaveDirectory(const AsciiString& path) const;
 
 	AsciiString realMapPathToPortableMapPath(const AsciiString& in) const;
-	AsciiString portableMapPathToRealMapPath(const AsciiString& in) const;
+	// Hypersonic @feature (D-146) forWriting: a user map path always resolves into our own user Maps folder, never into
+	// the vanilla Zero Hour one (read-only); otherwise a user map missing from ours resolves to the vanilla copy if any.
+	AsciiString portableMapPathToRealMapPath(const AsciiString& in, Bool forWriting = FALSE) const;
 
 	AsciiString getMapLeafName(const AsciiString& in) const;
 

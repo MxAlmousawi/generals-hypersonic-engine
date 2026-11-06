@@ -33,6 +33,8 @@
 
 #include "Common/INI.h"
 #include "Common/INIException.h"
+#include "Common/GlobalData.h"
+#include "Common/StackDump.h"
 
 #include "Common/DamageFX.h"
 #include "Common/file.h"
@@ -362,6 +364,39 @@ static INIFieldParseProc findFieldParse(const FieldParse* parseTable, const char
 	}
 }
 
+// Hypersonic @diagnostic INI parse-error report (field + stack at the failure), written to the user data folder.
+static FILE *openHypersonicDiagFile( const char *name, const char *mode )
+{
+	char path[ _MAX_PATH ];
+	path[0] = 0;
+	if( TheGlobalData )
+		strlcpy( path, TheGlobalData->getPath_UserData().str(), ARRAY_SIZE( path ) );
+	strlcat( path, name, ARRAY_SIZE( path ) );
+	return fopen( path, mode );
+}
+
+static FILE *s_hypersonicErrorFile = nullptr;
+static void hypersonicStackLine( const char *line )
+{
+	if( s_hypersonicErrorFile )
+		fprintf( s_hypersonicErrorFile, "  %s\n", line );
+}
+
+static void reportHypersonicINIError( const AsciiString& filename, const char *blockLine, UnsignedInt lineNum, const char *failingToken )
+{
+	s_hypersonicErrorFile = openHypersonicDiagFile( "HypersonicINIError.txt", "w" );
+	if( s_hypersonicErrorFile == nullptr )
+		return;
+	fprintf( s_hypersonicErrorFile, "INI parse error at %lu ms\nFile: %s\nBlock: %s\nFailing line number: %u\nFailing field (first token): %s\n\nStack at the failure:\n",
+		(unsigned long)timeGetTime(), filename.str(), blockLine, (unsigned)lineNum, failingToken ? failingToken : "(none)" );
+	const int STACKTRACE_SIZE = 40;
+	void *stacktrace[ STACKTRACE_SIZE ];
+	::FillStackAddresses( stacktrace, STACKTRACE_SIZE, 0 );
+	::StackDumpFromAddresses( stacktrace, STACKTRACE_SIZE, hypersonicStackLine );
+	fclose( s_hypersonicErrorFile );
+	s_hypersonicErrorFile = nullptr;
+}
+
 //-------------------------------------------------------------------------------------------------
 /** Load and parse an INI file */
 //-------------------------------------------------------------------------------------------------
@@ -400,9 +435,10 @@ UnsignedInt INI::load( AsciiString filename, INILoadType loadType, Xfer *pXfer )
 
 					} catch (...) {
 						DEBUG_CRASH(("Error parsing block '%s' in INI file '%s'", token, m_filename.str()) );
+						reportHypersonicINIError( m_filename, currentLine.str(), getLineNum(), m_buffer );
 						char buff[1024];
-						snprintf(buff, ARRAY_SIZE(buff), "Error parsing INI file '%s' (Line: '%s')\n",
-							m_filename.str(), currentLine.str());
+						snprintf(buff, ARRAY_SIZE(buff), "Error parsing INI file '%s' (Line: '%s', failing line %u: '%s'; see HypersonicINIError.txt)\n",
+							m_filename.str(), currentLine.str(), (unsigned)getLineNum(), m_buffer);
 
 						throw INIException(buff);
 					}

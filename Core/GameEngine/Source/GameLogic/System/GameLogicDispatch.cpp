@@ -33,6 +33,7 @@
 #include "Common/CRCDebug.h"
 #include "Common/FramePacer.h"
 #include "Common/GameAudio.h"
+#include "Common/HangWatch.h"
 #include "Common/GameEngine.h"
 #include "Common/GlobalData.h"
 #include "Common/NameKeyGenerator.h"
@@ -256,6 +257,8 @@ void GameLogic::clearGameData( Bool showScoreScreen )
 		DEBUG_CRASH(("We tried to clear the game data when we weren't in a game"));
 		return;
 	}
+
+	HangWatch::beginLongWork(); // Hypersonic @feature (D-274) Ending a match can take a while.
 
 	setClearingGameData( TRUE );
 

@@ -601,11 +601,21 @@ bool DX8Wrapper::Create_Device()
 	return true;
 }
 
+// Hypersonic @feature (D-274) Device events for the diagnostics log, set by HangWatch::init. Null otherwise.
+void (*DX8Wrapper_DiagEvent)(const char* text) = nullptr;
+
+static void Diag_Event(const char* text)
+{
+	if (DX8Wrapper_DiagEvent != nullptr)
+		DX8Wrapper_DiagEvent(text);
+}
+
 bool DX8Wrapper::Reset_Device(bool reload_assets)
 {
 	WWDEBUG_SAY(("Resetting device."));
 	DX8_THREAD_ASSERT();
 	if ((IsInitted) && (D3DDevice != nullptr)) {
+		Diag_Event("DEVICE reset begin");
 		// Release all non-MANAGED stuff
 		WW3D::_Invalidate_Textures();
 
@@ -632,10 +642,16 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 		if (hr != D3DERR_DEVICELOST )
 		{	DX8CALL_HRES(Reset(&_PresentParameters),hr)
 			if (hr != D3D_OK)
+			{
+				Diag_Event("DEVICE reset failed");
 				return false;	//reset failed.
+			}
 		}
 		else
+		{
+			Diag_Event("DEVICE reset not possible, still lost");
 			return false;	//device is lost and can't be reset.
+		}
 
 		if (reload_assets)
 		{
@@ -648,6 +664,7 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 		Set_Default_Global_Render_States();
 		SHD_INIT_SHADERS;
 		WWDEBUG_SAY(("Device reset completed"));
+		Diag_Event("DEVICE reset done");
 		return true;
 	}
 	WWDEBUG_SAY(("Device reset failed"));
@@ -1690,6 +1707,8 @@ void DX8Wrapper::End_Scene(bool flip_frames)
 			FrameCount++;
 		}
 		else {
+			if (!IsDeviceLost)
+				Diag_Event("DEVICE lost"); // Hypersonic @feature (D-274)
 			IsDeviceLost=true;
 		}
 

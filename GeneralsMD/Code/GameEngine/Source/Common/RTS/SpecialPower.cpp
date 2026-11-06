@@ -129,6 +129,18 @@ const char* const SpecialPowerMaskType::s_bitNameList[] =
 
 	"SPECIAL_BATTLESHIP_BOMBARDMENT",
 
+	// Hypersonic @feature (D-039)
+	"SPECIAL_MUNITION_LAUNCH_1",
+	"SPECIAL_MUNITION_LAUNCH_2",
+	"SPECIAL_MUNITION_LAUNCH_3",
+	"SPECIAL_MUNITION_LAUNCH_4",
+	"SPECIAL_MUNITION_LAUNCH_5",
+	"SPECIAL_MUNITION_LAUNCH_6",
+	"SPECIAL_MUNITION_LAUNCH_7",	// Hypersonic @feature (D-245)
+	"SPECIAL_IRAN_ALMAS_STRIKE", // Hypersonic @feature (D-246)
+	"SPECIAL_IRAN_GAZA_GUARD", // Hypersonic @feature (D-246 Update 6)
+	"SPECIAL_IRAN_GAZA_RELEASE",
+
 	nullptr
 };
 static_assert(ARRAY_SIZE(SpecialPowerMaskType::s_bitNameList) == SpecialPowerMaskType::NumBits + 1, "Incorrect array size");
@@ -203,6 +215,12 @@ void SpecialPowerStore::parseSpecialPowerDefinition( INI *ini )
 	{ "ViewObjectRange",					INI::parseReal,										nullptr,	offsetof( SpecialPowerTemplate, m_viewObjectRange ) },
 	{ "RadiusCursorRadius",				INI::parseReal,										nullptr,	offsetof( SpecialPowerTemplate, m_radiusCursorRadius ) },
 	{ "ShortcutPower",						INI::parseBool,										nullptr, offsetof( SpecialPowerTemplate, m_shortcutPower ) },
+	{ "EvaLaunchedAlly",					INI::parseAsciiString,						nullptr,	offsetof( SpecialPowerTemplate, m_evaLaunchedAlly ) },	// Hypersonic @feature (D-163)
+	{ "EvaLaunchedEnemy",					INI::parseAsciiString,						nullptr,	offsetof( SpecialPowerTemplate, m_evaLaunchedEnemy ) },	// Hypersonic @feature (D-163)
+	{ "EvaReadyOwn",							INI::parseAsciiString,						nullptr,	offsetof( SpecialPowerTemplate, m_evaReadyOwn ) },	// Hypersonic @feature (D-163)
+	{ "EvaDetectedEnemy",					INI::parseAsciiString,						nullptr,	offsetof( SpecialPowerTemplate, m_evaDetectedEnemy ) },	// Hypersonic @feature (D-163)
+	{ "EvaReadyEnemy",						INI::parseAsciiString,						nullptr,	offsetof( SpecialPowerTemplate, m_evaReadyEnemy ) },	// Hypersonic @feature (D-232)
+	{ "MinimumRange",							INI::parseReal,										nullptr,	offsetof( SpecialPowerTemplate, m_minimumRange ) },	// Hypersonic @feature (D-163)
 	{ "AcademyClassify",					INI::parseIndexList,			TheAcademyClassificationTypeNames, offsetof( SpecialPowerTemplate, m_academyClassificationType ) },
 	{ nullptr,	nullptr, nullptr,	0 }
 
@@ -223,6 +241,7 @@ SpecialPowerTemplate::SpecialPowerTemplate()
 	m_viewObjectRange = 0;
 	m_radiusCursorRadius = 0;
 	m_shortcutPower = FALSE;
+	m_minimumRange = 0.0f;
 
 }
 

@@ -263,6 +263,15 @@ public:
 	virtual Bool projectileHandleCollision(Object *other) = 0;
 	virtual void setFramesTillCountermeasureDiversionOccurs( UnsignedInt frames ) = 0; ///< Number of frames till missile diverts to countermeasures.
 	virtual void projectileNowJammed() = 0;
+	/// Hypersonic @feature split warhead (D-062): after the launch, fly the path in exactly this many frames (a cluster
+	/// weapon times its warheads' landings). Projectiles without a fixed path ignore it.
+	virtual void projectileSetFlightFrames(UnsignedInt frames) {}
+	/// Hypersonic @feature one-by-one release (D-162): after the launch, leave with this vertical speed (dist/frame; the
+	/// carrier's), so a warhead released from a diving missile does not start level. Projectiles without a fixed path ignore it.
+	virtual void projectileSetStartVerticalSpeed(Real vz) {}
+	/// Hypersonic @feature cone release (D-267): after the launch, leave with this horizontal speed too (dist/frame). The end
+	/// point and the flight time stay. Projectiles without a fixed path ignore it.
+	virtual void projectileSetStartHorizontalSpeed(Real vx, Real vy) {}
 };
 
 //-------------------------------------------------------------------------------------------------

@@ -419,6 +419,7 @@ public:
 	Real getFenceXOffset() const { return m_fenceXOffset; }  // return fence offset
 
 	Bool isBridge() const { return m_isBridge; }  // return fence offset
+	Bool isVisibleToOwnerInFog() const { return m_visibleToOwnerInFog; }	///< Hypersonic @feature (D-213)
 	Bool isBridgeLike() const { return isBridge() || isKindOf(KINDOF_WALK_ON_TOP_OF_WALL); }
 
 	// Only Object can ask this.  Everyone else should ask the Object.  In fact, you really should ask the Object everything.
@@ -746,6 +747,7 @@ private:
   Bool          m_maxSimultaneousDeterminedBySuperweaponRestriction; ///< If true, override value in m_maxSimultaneousOfType with value from GameInfo::getSuperweaponRestriction()
 	Bool					m_isPrerequisite;							///< Is this thing considered in a prerequisite for any other thing?
 	Bool					m_isBridge;										///< True if this model is a bridge.
+	Bool					m_visibleToOwnerInFog;				///< Hypersonic @feature (D-213): drawn for its owner and allies in fog and shroud
  	Bool					m_isBuildFacility;						///< is this the build facility for something? (calculated based on other template's prereqs)
 	Bool					m_isTrainable;								///< Whether or not I can even gain experience
 	Bool          m_enterGuard;									///< Whether or not I can enter objects when guarding

@@ -36,6 +36,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ActionManager.h"
+#include "GameLogic/Module/JetAIUpdate.h"
 #include "Common/BuildAssistant.h"
 #include "Common/GlobalData.h"
 #include "Common/Player.h"
@@ -121,6 +122,38 @@ static Bool isObjectShroudedForAction ( const Object *source, const Object *targ
 	return FALSE;
 }
 
+
+// Hypersonic @feature (D-246): the Gaza strike requires current vision for humans AND AI,
+// and a ground target. Guarding player orders may approach; the actual launch still requires range 600.
+static Bool isAlmasStrikeTargetValid(const Object *source, const Coord3D *pos, const Object *target, Bool allowApproach = FALSE)
+{
+  if (!source || !pos || !source->getControllingPlayer())
+    return FALSE;
+  const Weapon *weapon = source->getWeaponInWeaponSlot(SECONDARY_WEAPON);
+  if (!weapon || weapon->getStatus() != READY_TO_FIRE)
+    return FALSE; // D-246: no Almas until landing reloads it; also rechecked at launch.
+  const Real range = weapon->getTemplate()->getUnmodifiedAttackRange();
+  // Codex review (2026-10-29): measured like SpecialAbilityUpdate's approach (bounding spheres, 2D), so an approach
+  // that ends "in range" can always launch.
+  const Real distSqr = target ? ThePartitionManager->getDistanceSquared(source, target, FROM_BOUNDINGSPHERE_2D)
+    : ThePartitionManager->getDistanceSquared(source, pos, FROM_BOUNDINGSPHERE_2D);
+  if (!allowApproach && distSqr > range * range)
+    return FALSE;
+  const Int player = source->getControllingPlayer()->getPlayerIndex();
+  if (ThePartitionManager->getShroudStatusForPlayer(player, pos) != CELLSHROUD_CLEAR)
+    return FALSE;
+  if (target)
+  {
+    if (source->getRelationship(target) == ALLIES || target->isAirborneTarget() ||
+        target->isKindOf(KINDOF_PROJECTILE) || target->isEffectivelyDead())
+      return FALSE;
+    if (target->getShroudedStatus(player) >= OBJECTSHROUD_FOGGED ||
+        (target->testStatus(OBJECT_STATUS_STEALTHED) && !target->testStatus(OBJECT_STATUS_DETECTED)))
+      return FALSE;
+  }
+  return TRUE;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // ------------------------------------------------------------------------------------------------
@@ -180,6 +213,13 @@ Bool ActionManager::canGetRepairedAt( const Object *obj, const Object *repairDes
 		if( !obj->isAboveTerrain() ||
 					repairDest->isKindOf( KINDOF_FS_AIRFIELD ) == FALSE )
 			return FALSE;
+		// Hypersonic (D-246, Codex review): a pad with ParkingRequiredKindOf (the Drone Facility roof) repairs only its own type.
+		for( BehaviorModule **m = repairDest->getBehaviorModules(); *m; ++m )
+		{
+			const ParkingPlaceBehaviorInterface *pp = (*m)->getParkingPlaceBehaviorInterface();
+			if( pp && !pp->acceptsAircraftType( obj->getTemplate() ) )
+				return FALSE;
+		}
 	}
 	else
 	{
@@ -1507,6 +1547,23 @@ Bool ActionManager::canDoSpecialPowerAtLocation( const Object *obj, const Coord3
 			}
 		}
 
+		// Hypersonic @feature (D-163) not inside the power's MinimumRange from its source (MunitionLaunchPower: its
+		// launchers' minimum range, D-040)
+		if( !mod->isValidTargetLocation( loc ) )
+			return FALSE;
+
+		if (spTemplate->getSpecialPowerType() == SPECIAL_IRAN_GAZA_GUARD)
+		{
+			const JetAIUpdate* jet = obj->getAI() ? obj->getAI()->getJetAIUpdate() : nullptr;
+			return jet && jet->supportsGazaGuard() && !jet->isGazaGuarding() && isPointOnMap(loc);
+		}
+		if (spTemplate->getSpecialPowerType() == SPECIAL_IRAN_ALMAS_STRIKE)
+		{
+			const JetAIUpdate* jet = obj->getAI() ? obj->getAI()->getJetAIUpdate() : nullptr;
+			return isAlmasStrikeTargetValid(obj, loc, nullptr,
+				commandSource == CMD_FROM_PLAYER && jet && jet->isGazaGuarding()) && isPointOnMap(loc);
+		}
+
 		// Second check is shroudedness, if it is cared about
 		switch( spTemplate->getSpecialPowerType() )
 		{
@@ -1555,6 +1612,19 @@ Bool ActionManager::canDoSpecialPowerAtLocation( const Object *obj, const Coord3
 			case SPECIAL_CLEANUP_AREA:
 			case SPECIAL_BATTLESHIP_BOMBARDMENT:
 				//Don't allow "damaging" special powers in shrouded areas, but Fogged are okay.
+				return ThePartitionManager->getShroudStatusForPlayer( obj->getControllingPlayer()->getPlayerIndex(), loc ) != CELLSHROUD_SHROUDED;
+
+			// Hypersonic @feature Launch facility strikes (D-039) target like a stock superweapon, and not inside a
+			// missile's minimum range from its launcher (D-040).
+			case SPECIAL_MUNITION_LAUNCH_1:
+			case SPECIAL_MUNITION_LAUNCH_2:
+			case SPECIAL_MUNITION_LAUNCH_3:
+			case SPECIAL_MUNITION_LAUNCH_4:
+			case SPECIAL_MUNITION_LAUNCH_5:
+			case SPECIAL_MUNITION_LAUNCH_6:
+			case SPECIAL_MUNITION_LAUNCH_7:	// Hypersonic @feature (D-245) Qadr
+				if( !mod->isValidTargetLocation( loc ) )
+					return FALSE;
 				return ThePartitionManager->getShroudStatusForPlayer( obj->getControllingPlayer()->getPlayerIndex(), loc ) != CELLSHROUD_SHROUDED;
 
 			case SPECIAL_SPY_SATELLITE:
@@ -1648,6 +1718,13 @@ Bool ActionManager::canDoSpecialPowerAtObject( const Object *obj, const Object *
 				//Not fully ready
 				return false;
 			}
+		}
+
+		if (spTemplate->getSpecialPowerType() == SPECIAL_IRAN_ALMAS_STRIKE)
+		{
+			const JetAIUpdate* jet = obj->getAI() ? obj->getAI()->getJetAIUpdate() : nullptr;
+			return isAlmasStrikeTargetValid(obj, target->getPosition(), target,
+				commandSource == CMD_FROM_PLAYER && jet && jet->isGazaGuarding());
 		}
 
 		// if the target is in the shroud, we can't do anything
@@ -1884,6 +1961,8 @@ Bool ActionManager::canDoSpecialPowerAtObject( const Object *obj, const Object *
 // ------------------------------------------------------------------------------------------------
 Bool ActionManager::canDoSpecialPower( const Object *obj, const SpecialPowerTemplate *spTemplate, CommandSourceType commandSource, UnsignedInt commandOptions, Bool checkSourceRequirements )
 {
+	if (spTemplate->getSpecialPowerType() == SPECIAL_IRAN_GAZA_GUARD)
+		return false; // requires a ground position
 	if (checkSourceRequirements)
 	{
 		//First check, if our object can do this special power.
@@ -1903,6 +1982,12 @@ Bool ActionManager::canDoSpecialPower( const Object *obj, const SpecialPowerTemp
 				//Not fully ready
 				return false;
 			}
+		}
+
+		if (spTemplate->getSpecialPowerType() == SPECIAL_IRAN_GAZA_RELEASE)
+		{
+			const JetAIUpdate* jet = obj->getAI() ? obj->getAI()->getJetAIUpdate() : nullptr;
+			return jet && jet->supportsGazaGuard() && jet->isGazaGuarding() && !obj->isDisabled();
 		}
 
 		switch( spTemplate->getSpecialPowerType() )

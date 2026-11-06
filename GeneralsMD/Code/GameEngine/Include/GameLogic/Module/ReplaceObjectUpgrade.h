@@ -36,9 +36,11 @@ class ReplaceObjectUpgradeModuleData : public UpgradeModuleData
 {
 public:
 	AsciiString m_replaceObjectName;
+	Bool m_keepHealthAndProgress;	///< Hypersonic @feature (D-141) keep health fraction, AutoDeposit timer, no score recount
 
 	ReplaceObjectUpgradeModuleData()
 	{
+		m_keepHealthAndProgress = FALSE;
 	}
 
 	static void buildFieldParse(MultiIniFieldParse& p);

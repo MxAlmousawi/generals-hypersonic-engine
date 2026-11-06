@@ -42,6 +42,7 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/ObjectIter.h"
 #include "GameLogic/Module/PointDefenseLaserUpdate.h"
+#include "GameLogic/Module/HitChanceBehavior.h"
 #include "GameLogic/Module/PhysicsUpdate.h"
 #include "GameLogic/Weapon.h"
 
@@ -289,6 +290,12 @@ Object* PointDefenseLaserUpdate::scanClosestTarget()
 			//We can't see it.
 			continue;
 		}
+
+		// Hypersonic @feature (Generals Hypersonic D-053): a laser cannot stop a diving ballistic missile. Opt-in on the
+		// target (HitChanceBehavior ImmuneToPointDefense); stock objects have no HitChanceBehavior.
+		const HitChanceBehavior *hitChance = HitChanceBehavior::findHitChanceBehavior( other );
+		if( hitChance != nullptr && hitChance->isImmuneToPointDefense() )
+			continue;
 
 		Real fDist = sqrt( ThePartitionManager->getDistanceSquared( me, other, FROM_CENTER_2D ) );
 

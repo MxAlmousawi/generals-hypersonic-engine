@@ -33,6 +33,9 @@
 #include "Common/file.h"
 #include "Common/FileSystem.h"
 #include "Common/GameAudio.h"
+#if RTS_ZEROHOUR
+#include "Common/GameState.h"	// Hypersonic @feature (D-146)
+#endif
 #include "Common/LocalFileSystem.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
@@ -785,7 +788,13 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	DEBUG_LOG(("%ls", log.str()));
 #endif
 
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-146) a received map file is written into our own user Maps folder, never into the
+	// vanilla Zero Hour one (where getRealFilename() would point when this player has a copy there)
+	AsciiString realFileName = TheGameState->portableMapPathToRealMapPath(msg->getPortableFilename(), TRUE);
+#else
 	AsciiString realFileName = msg->getRealFilename();
+#endif
 	if (realFileName.isEmpty())
 	{
 		// TheSuperHackers @security slurmlord 18/06/2025 As the file name/path from the NetFileCommandMsg failed to normalize,
@@ -895,7 +904,17 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 void ConnectionManager::processFileAnnounce(NetFileAnnounceCommandMsg *msg)
 {
 	DEBUG_LOG(("ConnectionManager::processFileAnnounce() - expecting '%s' (%s) in command %d", msg->getPortableFilename().str(), msg->getRealFilename().str(), msg->getFileID()));
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-146) on a receiver of the file (in the announce's player mask; DoAnyMapTransfers switched
+	// its map to our folder) the file goes into our own user Maps folder (processFile), so its progress is keyed by
+	// that path. The host and players that already have the map keep their real (possibly vanilla) path.
+	if (msg->getPlayerID() != m_localSlot && (msg->getPlayerMask() & (1 << m_localSlot)))
+		s_fileCommandMap[msg->getFileID()] = TheGameState->portableMapPathToRealMapPath(msg->getPortableFilename(), TRUE);
+	else
+		s_fileCommandMap[msg->getFileID()] = msg->getRealFilename();
+#else
 	s_fileCommandMap[msg->getFileID()] = msg->getRealFilename();
+#endif
 	s_fileRecipientMaskMap[msg->getFileID()] = msg->getPlayerMask();
 	for (Int i=0; i<MAX_SLOTS; ++i)
 	{

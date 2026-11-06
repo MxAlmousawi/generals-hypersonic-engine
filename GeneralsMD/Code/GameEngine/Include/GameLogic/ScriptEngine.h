@@ -334,6 +334,14 @@ public:
 	const AttackPriorityInfo *getAttackInfo(const AsciiString& name);
 
 	const TCounter *getCounter(const AsciiString& counterName);
+	/// Hypersonic @feature (D-190 AI state log) a flag by its (qualified) name, null if no script has used it yet
+	const TFlag *getFlagByName(const AsciiString& flagName) const
+	{
+		for (Int i = 1; i < m_numFlags; ++i)
+			if (flagName == m_flags[i].name)
+				return &m_flags[i];
+		return nullptr;
+	}
 
 	void createNamedMapReveal(const AsciiString& revealName, const AsciiString& waypointName, Real radiusToReveal, const AsciiString& playerName);
 	void doNamedMapReveal(const AsciiString& revealName);

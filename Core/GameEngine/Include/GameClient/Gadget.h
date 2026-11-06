@@ -431,6 +431,8 @@ typedef struct _PushButtonData
 	void *userData;					///< random additional data we can set
 	const Image *overlayImage; ///< An overlay image (like a veterancy symbol)
 	AsciiString altSound;		///< use an alternative sound if one is set
+	// Hypersonic @feature upgrade badge (Generals Hypersonic D-099)
+	const Image *badgeImage;	///< drawn over the top-right corner (upgrade command buttons), or null
 } PushButtonData;
 
 // TabControlData ------------------------------------------------------------

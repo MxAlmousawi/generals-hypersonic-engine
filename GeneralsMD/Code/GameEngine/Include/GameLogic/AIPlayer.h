@@ -153,7 +153,8 @@ public:
 
 	AIPlayer( Player *p );							///< constructor
 
-	virtual Bool computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *pos, Int playerNdx, Real weaponRadius); ///< Calculates best pos for weapon given radius.
+	// Hypersonic @feature (D-172) minRangeFrom/minRange: only aim at least minRange (2D) from that point
+	virtual Bool computeSuperweaponTarget(const SpecialPowerTemplate *power, Coord3D *pos, Int playerNdx, Real weaponRadius, const Coord3D *minRangeFrom = nullptr, Real minRange = 0.0f); ///< Calculates best pos for weapon given radius.
 
 public: // AIPlayer interface, may be overridden by AISkirmishPlayer.  jba.
 

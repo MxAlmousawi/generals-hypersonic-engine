@@ -33,10 +33,25 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
+#include "Common/ThingTemplate.h"
 #include "Common/PlayerList.h"
 #include "Common/Xfer.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Module/SpyVisionUpdate.h"
+#include "GameLogic/Object.h"
+#include "GameLogic/ObjectCreationList.h"
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature science-levelled reveal (D-066): "RevealLevel = <science> <OCL>".
+/*static*/ void SpyVisionUpdateModuleData::parseRevealLevel( INI* ini, void * /*instance*/, void *store, const void* /*userData*/ )
+{
+	RevealLevel level;
+	level.m_science = SCIENCE_INVALID;
+	level.m_ocl = nullptr;
+	INI::parseScience( ini, nullptr, &level.m_science, nullptr );
+	INI::parseObjectCreationList( ini, nullptr, &level.m_ocl, nullptr );
+	((std::vector<RevealLevel>*)store)->push_back( level );
+}
 
 
 //-------------------------------------------------------------------------------------------------
@@ -48,6 +63,9 @@ SpyVisionUpdate::SpyVisionUpdate( Thing *thing, const ModuleData* moduleData ) :
 	m_currentlyActive = FALSE;
 	m_resetTimersNextUpdate = FALSE;
 	m_disabledUntilFrame = 0;
+	// Hypersonic (D-066): a science-levelled reveal checks its owner's sciences from the start.
+	if( !getSpyVisionUpdateModuleData()->m_revealLevels.empty() )
+		setWakeFrame(getObject(), UPDATE_SLEEP_NONE);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -135,6 +153,9 @@ UpdateSleepTime SpyVisionUpdate::update()
 	const SpyVisionUpdateModuleData *data = getSpyVisionUpdateModuleData();
 	UnsignedInt now = TheGameLogic->getFrame();
 
+	if( !data->m_revealLevels.empty() )
+		return updateReveal();	// Hypersonic (D-066)
+
 	//Once disable has complete and we are waking up from it, then reset the interval so
 	//it has to wait before going on again. If it doesn't have an interval, we turn it on
 	//immediately, but only for self powered objects.
@@ -183,6 +204,111 @@ UpdateSleepTime SpyVisionUpdate::update()
 	}
 
 	return UPDATE_SLEEP_FOREVER;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature science-levelled reveal (D-066). The next reveal frame is kept in m_deactivateFrame (saved; the
+// spy-vision use of it never runs in this mode), so there is no save-format change. Before a level is bought it checks
+// once a second, so the first reveal comes right after the purchase; then every SelfPoweredInterval.
+//-------------------------------------------------------------------------------------------------
+namespace
+{
+	struct RevealTargets
+	{
+		KindOfMaskType kinds;
+		std::vector<Coord3D> *positions;
+	};
+	void collectRevealTarget( Object *obj, void *userData )
+	{
+		RevealTargets *targets = (RevealTargets *)userData;
+		if( obj != nullptr && !obj->isEffectivelyDead() && obj->isAnyKindOf( targets->kinds ) )
+			targets->positions->push_back( *obj->getPosition() );
+	}
+
+	struct RevealerSearch
+	{
+		const Object *self;
+		Bool foundLower;
+	};
+	void findLowerRevealer( Object *obj, void *userData )
+	{
+		RevealerSearch *search = (RevealerSearch *)userData;
+		if( obj == nullptr || obj == search->self || search->foundLower )
+			return;
+		if( obj->getID() < search->self->getID() && obj->getTemplate()->isEquivalentTo( search->self->getTemplate() )
+			&& !obj->isEffectivelyDead() && !obj->testStatus( OBJECT_STATUS_UNDER_CONSTRUCTION )
+			&& !obj->testStatus( OBJECT_STATUS_SOLD ) )
+			search->foundLower = TRUE;
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+Bool SpyVisionUpdate::isPlayersRevealer() const
+{
+	const Object *obj = getObject();
+	const Player *owner = obj->getControllingPlayer();
+	if( owner == nullptr )
+		return FALSE;
+	RevealerSearch search;
+	search.self = obj;
+	search.foundLower = FALSE;
+	owner->iterateObjects( findLowerRevealer, &search );
+	return !search.foundLower;
+}
+
+//-------------------------------------------------------------------------------------------------
+UpdateSleepTime SpyVisionUpdate::updateReveal()
+{
+	const SpyVisionUpdateModuleData *data = getSpyVisionUpdateModuleData();
+	Object *obj = getObject();
+	const UnsignedInt now = TheGameLogic->getFrame();
+	const UnsignedInt checkFrames = LOGICFRAMES_PER_SECOND;
+	m_resetTimersNextUpdate = FALSE;
+
+	Player *owner = obj->getControllingPlayer();
+	const ObjectCreationList *ocl = nullptr;
+	if( owner != nullptr )
+	{
+		for( std::vector<SpyVisionUpdateModuleData::RevealLevel>::const_iterator it = data->m_revealLevels.begin();
+				it != data->m_revealLevels.end(); ++it )
+		{
+			if( it->m_ocl != nullptr && owner->hasScience( it->m_science ) )
+				ocl = it->m_ocl;	// listed lowest level first: the highest one owned wins
+		}
+	}
+	if( ocl == nullptr || ThePlayerList == nullptr )
+		return UPDATE_SLEEP( checkFrames );
+	if( obj->isEffectivelyDead() || obj->testStatus( OBJECT_STATUS_UNDER_CONSTRUCTION ) || obj->testStatus( OBJECT_STATUS_SOLD )
+		|| obj->isDisabled() )
+		return UPDATE_SLEEP( checkFrames );
+	if( now < m_deactivateFrame )
+		return UPDATE_SLEEP( m_deactivateFrame - now );
+	const UnsignedInt interval = max( (UnsignedInt)1, data->m_selfPoweredInterval );
+	if( !isPlayersRevealer() )
+	{
+		// another of the player's objects does it: wait a full interval as if this one had revealed, so if that one is
+		// lost, this one takes over without revealing early
+		m_deactivateFrame = now + interval;
+		return UPDATE_SLEEP( interval );
+	}
+
+	std::vector<Coord3D> positions;
+	RevealTargets targets;
+	targets.kinds = data->m_spyOnKindof;
+	targets.positions = &positions;
+	for( Int i = 0; i < ThePlayerList->getPlayerCount(); ++i )
+	{
+		Player *player = ThePlayerList->getNthPlayer( i );
+		if( player == nullptr || player == owner || player->getDefaultTeam() == nullptr )
+			continue;
+		if( owner->getRelationship( player->getDefaultTeam() ) == ENEMIES )
+			player->iterateObjects( collectRevealTarget, &targets );
+	}
+	for( std::vector<Coord3D>::const_iterator p = positions.begin(); p != positions.end(); ++p )
+		ObjectCreationList::create( ocl, obj, &(*p), &(*p), 0.0f );
+
+	m_deactivateFrame = now + interval;
+	return UPDATE_SLEEP( interval );
 }
 
 //-------------------------------------------------------------------------------------------------

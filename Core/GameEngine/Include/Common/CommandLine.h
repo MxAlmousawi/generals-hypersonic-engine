@@ -35,6 +35,9 @@ public:
 	// Parses startup flags and applies the process working directory.
 	static void parseCommandLineForStartup();
 	static void parseCommandLineForEngineInit();
+	// Hypersonic @bugfix (D-145) only -mod (and the Hypersonic.big next to the exe), before GameData is read, so
+	// the mod archive can be mounted first and its Data\INI\GameData.ini wins. parseCommandLineForEngineInit skips it.
+	static void parseCommandLineForMod();
 
 	// Returns true if command-line parsing consumed the zero-based argument index.
 	// The index excludes the executable name.

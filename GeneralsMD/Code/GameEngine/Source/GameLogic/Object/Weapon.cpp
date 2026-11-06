@@ -37,6 +37,7 @@
 #define DEFINE_WEAPONAFFECTSMASK_NAMES
 #define DEFINE_WEAPONRELOAD_NAMES
 #define DEFINE_WEAPONPREFIRE_NAMES
+#define DEFINE_INTERCEPTORCLASS_NAMES
 
 #include "Common/crc.h"
 #include "Common/CRCDebug.h"
@@ -47,6 +48,7 @@
 #include "Common/Player.h"
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
+#include "Common/Upgrade.h"
 #include "Common/Xfer.h"
 
 #include "GameClient/Drawable.h"
@@ -75,6 +77,10 @@
 #include "GameLogic/Module/ProjectileStreamUpdate.h"
 #include "GameLogic/Module/PhysicsUpdate.h"
 #include "GameLogic/Module/SpawnBehavior.h"
+#include "GameLogic/Module/HitChanceBehavior.h"
+#include "GameLogic/Module/StickyBombUpdate.h"
+#include "GameLogic/Module/MissileAIUpdate.h"
+#include "GameLogic/Locomotor.h"
 #include "GameLogic/TerrainLogic.h"
 
 #define RATIONALIZE_ATTACK_RANGE
@@ -167,6 +173,8 @@ const FieldParse WeaponTemplate::TheWeaponTemplateFieldParseTable[] =
 	{ "PrimaryDamageRadius",			INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_primaryDamageRadius) },
 	{ "SecondaryDamage",					INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_secondaryDamage) },
 	{ "SecondaryDamageRadius",		INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_secondaryDamageRadius) },
+	{ "TertiaryDamage",					INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_tertiaryDamage) },	// Hypersonic @feature third ring (Generals Hypersonic D-222)
+	{ "TertiaryDamageRadius",		INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_tertiaryDamageRadius) },	// Hypersonic @feature (D-222)
 	{ "ShockWaveAmount",					INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_shockWaveAmount) },
 	{ "ShockWaveRadius",					INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_shockWaveRadius) },
 	{ "ShockWaveTaperOff",				INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_shockWaveTaperOff) },
@@ -239,6 +247,45 @@ const FieldParse WeaponTemplate::TheWeaponTemplateFieldParseTable[] =
 	{ "ContinueAttackRange",			INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_continueAttackRange) },
 	{ "SuspendFXDelay",						INI::parseDurationUnsignedInt,					nullptr,							offsetof(WeaponTemplate, m_suspendFXDelay) },
 	{ "MissileCallsOnDie",			INI::parseBool,													nullptr,							offsetof(WeaponTemplate, m_dieOnDetonate) },
+	// Hypersonic @feature Generals Hypersonic combat rules (IRAN_DESIGN 7b, 7c, 10b)
+	{ "InterceptorClass",				INI::parseIndexList,										TheInterceptorClassNames,	offsetof(WeaponTemplate, m_interceptorClass) },
+	{ "MissileHitsToKill",			INI::parseInt,													nullptr,							offsetof(WeaponTemplate, m_missileHitsToKill) },	// Hypersonic (D-195)
+	{ "DroneHitChanceScale",		INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_droneHitChanceScale) },	// Hypersonic (D-195)
+	{ "MissileHitChanceScale",		INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_missileHitChanceScale) },	// Hypersonic (D-195)
+	{ "ScatterRadiusUniform",		INI::parseBool,													nullptr,							offsetof(WeaponTemplate, m_scatterRadiusUniform) },
+	{ "ScatterRadiusUpgrade",		WeaponTemplate::parseScatterRadiusUpgrade,	nullptr,							0 },
+	{ "ZeroScatterMarker",			INI::parseAsciiString,									nullptr,							offsetof(WeaponTemplate, m_zeroScatterMarkerName) },
+	// Hypersonic @feature cluster warhead (Generals Hypersonic D-048)
+	{ "ClusterCount",						INI::parseInt,													nullptr,							offsetof(WeaponTemplate, m_clusterCount) },
+	{ "ClusterRadius",					INI::parseReal,													nullptr,							offsetof(WeaponTemplate, m_clusterRadius) },
+	{ "ClusterDelay",						INI::parseDurationUnsignedInt,					nullptr,							offsetof(WeaponTemplate, m_clusterDelay) },
+	{ "ClusterWeapon",					INI::parseAsciiString,									nullptr,							offsetof(WeaponTemplate, m_clusterWeaponName) },
+	// Hypersonic @feature (Generals Hypersonic D-055) the projectile is never diverted by countermeasure flares
+	{ "IgnoresCountermeasures",	INI::parseBool,											nullptr,							offsetof(WeaponTemplate, m_ignoresCountermeasures) },
+	// Hypersonic @feature (Generals Hypersonic D-060) the detonation FX scales with the blast's damage
+	{ "ScaleDetonationFX",				INI::parseBool,											nullptr,							offsetof(WeaponTemplate, m_scaleDetonationFX) },
+	// Hypersonic @feature (Generals Hypersonic D-148) the FX play at the target point, not at the firing object
+	{ "PlayFXAtTarget",						INI::parseBool,											nullptr,							offsetof(WeaponTemplate, m_fxAtTarget) },
+	// Hypersonic @feature (Generals Hypersonic D-148) a fixed size factor for the FireFX and the detonation FX
+	{ "FXScale",									INI::parseReal,											nullptr,							offsetof(WeaponTemplate, m_fxScale) },
+	// Hypersonic @feature (Generals Hypersonic D-158) split warhead: the centre warhead's own weapon (no ring, no spread)
+	{ "ClusterCenterWeapon",			INI::parseAsciiString,									nullptr,							offsetof(WeaponTemplate, m_clusterCenterWeaponName) },
+	// Hypersonic @feature (Generals Hypersonic D-162) the carrier releases its projectile warheads one at a time
+	{ "ClusterReleaseInterval",	INI::parseDurationUnsignedInt,					nullptr,							offsetof(WeaponTemplate, m_clusterReleaseInterval) },
+	{ "ClusterReleaseCarrierSpeed",	INI::parsePercentToReal,							nullptr,							offsetof(WeaponTemplate, m_clusterReleaseCarrierSpeed) },
+	{ "ClusterReleaseFinalSpeed",		INI::parsePercentToReal,							nullptr,							offsetof(WeaponTemplate, m_clusterReleaseFinalSpeed) },	// Hypersonic @feature (D-215)
+	{ "ClusterReleaseStart",			INI::parseDurationUnsignedInt,					nullptr,							offsetof(WeaponTemplate, m_clusterReleaseStart) },
+	{ "ClusterReleaseLead",			INI::parseDurationUnsignedInt,					nullptr,							offsetof(WeaponTemplate, m_clusterReleaseLead) },
+	// Hypersonic @feature (Generals Hypersonic D-245) terminal cluster release: the carrier is gone after its last release
+	{ "ClusterReleaseCarrierVanishes",	INI::parseBool,										nullptr,							offsetof(WeaponTemplate, m_clusterReleaseCarrierVanishes) },
+	{ "ClusterReleaseVanishFX",		INI::parseFXList,										nullptr,							offsetof(WeaponTemplate, m_clusterReleaseVanishFX) },
+	// Hypersonic @feature (Generals Hypersonic D-261) released warheads leave level and fall this long (the D-062 drop arc)
+	{ "ClusterReleaseDropTime",		INI::parseDurationUnsignedInt,					nullptr,							offsetof(WeaponTemplate, m_clusterReleaseDropTime) },
+	// Hypersonic @feature (Generals Hypersonic D-267) cone release: the warheads carry on with the missile, spreading in a cone
+	{ "ClusterReleaseConeSpeed",		INI::parseVelocityReal,									nullptr,							offsetof(WeaponTemplate, m_clusterReleaseConeSpeed) },
+	{ "ClusterReleaseConeInherit",	INI::parsePercentToReal,								nullptr,							offsetof(WeaponTemplate, m_clusterReleaseConeInherit) },
+	// Hypersonic @feature (Generals Hypersonic D-147) hit chance against airborne targets without a HitChanceBehavior
+	{ "HitChance",								INI::parsePercentToReal,								nullptr,							offsetof(WeaponTemplate, m_hitChance) },
 	{ nullptr,												nullptr,																		nullptr,							0 }
 
 };
@@ -257,6 +304,8 @@ WeaponTemplate::WeaponTemplate() : m_nextTemplate(nullptr)
 	m_primaryDamageRadius						= 0.0f;
 	m_secondaryDamage								= 0.0f;
 	m_secondaryDamageRadius					= 0.0f;
+	m_tertiaryDamage								= 0.0f;	// Hypersonic @feature (D-222) off
+	m_tertiaryDamageRadius						= 0.0f;	// Hypersonic @feature (D-222) off
 	m_attackRange										= 0.0f;
 	m_minimumAttackRange						= 0.0f;
 	m_requestAssistRange						= 0.0f;
@@ -323,6 +372,42 @@ WeaponTemplate::WeaponTemplate() : m_nextTemplate(nullptr)
 	m_damageStatusType							= OBJECT_STATUS_NONE;
 	m_suspendFXDelay								= 0;
 	m_dieOnDetonate						= FALSE;
+	m_interceptorClass							= INTERCEPTOR_GUN;
+	m_missileHitsToKill							= 0;
+	m_droneHitChanceScale						= 1.0f;
+	m_missileHitChanceScale						= 1.0f;
+	m_scatterRadiusUniform					= FALSE;
+	m_zeroScatterMarkerName.clear();
+	m_zeroScatterMarkerTmpl					= nullptr;
+	m_leadProfile.m_valid						= FALSE;
+	m_clusterCount									= 0;
+	m_clusterRadius									= 0.0f;
+	m_clusterDelay									= 0;
+	m_clusterWeaponName.clear();
+	m_clusterWeapon									= nullptr;
+	m_ignoresCountermeasures				= FALSE;
+	m_scaleDetonationFX							= FALSE;
+	m_fxScale												= 1.0f;
+	m_fxAtTarget										= FALSE;
+	m_clusterCenterWeaponName.clear();
+	m_clusterCenterWeapon						= nullptr;
+	m_clusterReleaseInterval				= 0;
+	m_clusterReleaseLead						= 0;
+	m_clusterReleaseStart						= 0;
+	m_clusterReleaseCarrierSpeed		= 1.0f;
+	m_clusterReleaseFinalSpeed			= 0.0f;	// Hypersonic @feature (D-215)
+	m_clusterReleaseCarrierVanishes	= FALSE;	// Hypersonic @feature (D-245)
+	m_clusterReleaseVanishFX				= nullptr;
+	m_clusterReleaseDropTime				= 0;	// Hypersonic @feature (D-261)
+	m_clusterReleaseConeSpeed				= 0.0f;	// Hypersonic @feature (D-267)
+	m_clusterReleaseConeInherit			= 0.0f;
+	m_hitChance											= 1.0f;
+	m_leadProfile.m_launchSpeed			= 0.0f;
+	m_leadProfile.m_maxSpeed				= 0.0f;
+	m_leadProfile.m_speedGain				= 0.0f;
+	m_leadProfile.m_ignitionFrames	= 0;
+	m_leadProfile.m_maxFrames				= 0;
+	m_leadProfile.m_fuseRadius			= 0.0f;
 
 	m_historicDamageTriggerId = 0;
 }
@@ -404,6 +489,20 @@ void WeaponTemplate::reset()
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature ScatterRadiusUpgrade = <UpgradeName> <ScatterRadius>. May be listed several times; while the
+// firer's player has completed one or more of the upgrades, the smallest of their radii replaces ScatterRadius.
+/*static*/ void WeaponTemplate::parseScatterRadiusUpgrade( INI* ini, void *instance, void * /*store*/, const void* /*userData*/ )
+{
+	WeaponTemplate* self = (WeaponTemplate*)instance;
+
+	ScatterRadiusUpgrade entry;
+	entry.m_upgradeName = ini->getNextToken();
+	entry.m_scatterRadius = INI::scanReal(ini->getNextToken());
+
+	self->m_scatterRadiusUpgrades.push_back(entry);
+}
+
+//-------------------------------------------------------------------------------------------------
 void WeaponTemplate::postProcessLoad()
 {
 	if (!TheThingFactory)
@@ -449,6 +548,405 @@ void WeaponTemplate::postProcessLoad()
 		m_projectileDetonationOCLNames[i].clear();
 	}
 
+	// Hypersonic @feature designation marker for zero scatter
+	if (m_zeroScatterMarkerName.isEmpty())
+	{
+		m_zeroScatterMarkerTmpl = nullptr;
+	}
+	else
+	{
+		m_zeroScatterMarkerTmpl = TheThingFactory->findTemplate(m_zeroScatterMarkerName);
+		DEBUG_ASSERTCRASH(m_zeroScatterMarkerTmpl, ("ZeroScatterMarker %s not found in weapon %s!",m_zeroScatterMarkerName.str(),m_name.str()));
+	}
+
+	// Hypersonic @feature SAM lead interception profile (D-038)
+	computeLeadInterceptProfile();
+
+	// Hypersonic @feature cluster warhead (D-048)
+	m_clusterWeapon = nullptr;
+	if (m_clusterWeaponName.isNotEmpty() && m_clusterWeaponName.compareNoCase("None") != 0)
+	{
+		m_clusterWeapon = TheWeaponStore->findWeaponTemplate(m_clusterWeaponName);
+		DEBUG_ASSERTCRASH(m_clusterWeapon, ("ClusterWeapon %s not found in weapon %s!",m_clusterWeaponName.str(),m_name.str()));
+	}
+	// Hypersonic @feature split warhead centre (D-158)
+	m_clusterCenterWeapon = nullptr;
+	if (m_clusterCenterWeaponName.isNotEmpty() && m_clusterCenterWeaponName.compareNoCase("None") != 0)
+	{
+		m_clusterCenterWeapon = TheWeaponStore->findWeaponTemplate(m_clusterCenterWeaponName);
+		DEBUG_ASSERTCRASH(m_clusterCenterWeapon, ("ClusterCenterWeapon %s not found in weapon %s!",m_clusterCenterWeaponName.str(),m_name.str()));
+	}
+
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature SAM lead interception (Generals Hypersonic D-038).
+// A SAM-class weapon (InterceptorClass = SAM) whose projectile is a MissileAIUpdate missile with TryToFollowTarget
+// engages SAMHitIsLethal targets (the Iranian missiles) at a predicted intercept point: it fires when that point lies
+// within AttackRange, flies to it and re-solves it every frame. This derives the interceptor's flight profile from
+// the projectile's MissileAIUpdate and its SET_NORMAL locomotor. Nothing here is runtime state.
+//-------------------------------------------------------------------------------------------------
+
+// Upper bound on the flight time we look ahead when the interceptor has no fuel limit (10 s).
+static const UnsignedInt LEAD_INTERCEPT_MAX_FRAMES = 10 * LOGICFRAMES_PER_SECOND;
+// Fastest target the acquisition search allows for (Fattah with Engine Improvement: 2000 units/s). Only sizes the
+// search radius; every candidate is still tested with the exact intercept solution.
+static const Real LEAD_INTERCEPT_MAX_TARGET_SPEED = 2000.0f / LOGICFRAMES_PER_SECOND;
+
+void WeaponTemplate::computeLeadInterceptProfile()
+{
+	m_leadProfile.m_valid = FALSE;
+
+	if (m_interceptorClass != INTERCEPTOR_SAM || m_projectileTmpl == nullptr)
+		return;
+
+	const MissileAIUpdateModuleData* missileData = nullptr;
+	const ModuleInfo& moduleInfo = m_projectileTmpl->getBehaviorModuleInfo();
+	for (Int i = 0; i < moduleInfo.getCount(); ++i)
+	{
+		if (moduleInfo.getNthName(i) == "MissileAIUpdate")
+		{
+			missileData = static_cast<const MissileAIUpdateModuleData*>(moduleInfo.getNthData(i));
+			break;
+		}
+	}
+	if (missileData == nullptr || !missileData->m_tryToFollowTarget)
+		return;
+
+	const LocomotorTemplateVector* locos = missileData->findLocomotorTemplateVector(LOCOMOTORSET_NORMAL);
+	if (locos == nullptr || locos->empty() || (*locos)[0] == nullptr)
+		return;
+
+	const LocomotorTemplate* loco = (*locos)[0];
+	Real maxSpeed = loco->getMaxSpeed();
+	Real accel = loco->getAcceleration();
+	Real launchSpeed = missileData->m_initialVel;
+	if (missileData->m_useWeaponSpeed)
+	{
+		// MissileAIUpdate caps both speed and acceleration at the weapon speed and launches at it.
+		launchSpeed = m_weaponSpeed;
+		maxSpeed = min(maxSpeed, m_weaponSpeed);
+		accel = min(accel, m_weaponSpeed);
+	}
+	if (maxSpeed <= 0.0f)
+		return;
+
+	// A THRUST locomotor thrusts with accel minus a drag of vel * (accel / maxSpeed), so every frame the missile gains
+	// that fraction of the speed it still lacks (Locomotor::moveTowardsPositionThrust). Other appearances: full speed.
+	Real gain = 1.0f;
+	if (loco->getAppearance() == LOCO_THRUST)
+		gain = clamp(0.0f, accel / maxSpeed, 1.0f);
+
+	m_leadProfile.m_launchSpeed = launchSpeed;
+	m_leadProfile.m_maxSpeed = maxSpeed;
+	m_leadProfile.m_speedGain = gain;
+	m_leadProfile.m_ignitionFrames = missileData->m_ignitionDelay;
+	m_leadProfile.m_maxFrames = LEAD_INTERCEPT_MAX_FRAMES;
+	if (missileData->m_fuelLifetime > 0 && missileData->m_fuelLifetime + missileData->m_ignitionDelay < LEAD_INTERCEPT_MAX_FRAMES)
+		m_leadProfile.m_maxFrames = missileData->m_fuelLifetime + missileData->m_ignitionDelay;
+	m_leadProfile.m_fuseRadius = missileData->m_lockDistance > 0.0f ? missileData->m_lockDistance : maxSpeed;
+	m_leadProfile.m_valid = TRUE;
+}
+
+//-------------------------------------------------------------------------------------------------
+/*static*/ Bool WeaponTemplate::isLeadInterceptTarget(const Object* victim)
+{
+	if (victim == nullptr || victim->isEffectivelyDead())
+		return FALSE;
+
+	const HitChanceBehavior* hitChance = HitChanceBehavior::findHitChanceBehavior(victim);
+	return hitChance != nullptr && hitChance->isSAMHitLethal() && hitChance->isActive();
+}
+
+//-------------------------------------------------------------------------------------------------
+// The target's velocity (dist/frame). A braking projectile (a missile in its final lock) does not move by its physics
+// velocity: its locomotor moves it straight at its goal at its current speed (Locomotor::locoUpdate_moveTowardsPosition).
+/*static*/ void WeaponTemplate::getLeadTargetVelocity(const Object* victim, Coord3D* vel)
+{
+	vel->zero();
+	// Hypersonic @fix (D-048): a missile on its ballistic arc is placed by its AI; its physics velocity is zero
+	const MissileAIUpdate* arc = victim->getAI() != nullptr ? victim->getAI()->getMissileAIUpdate() : nullptr;
+	if (arc != nullptr && arc->isOnBallisticArc())
+	{
+		arc->getBallisticVelocity(vel);
+		return;
+	}
+	const PhysicsBehavior* physics = victim->getPhysics();
+	if (physics == nullptr)
+		return;
+
+	*vel = *physics->getVelocity();
+
+	const AIUpdateInterface* ai = victim->getAI();
+	if (ai != nullptr && victim->isKindOf(KINDOF_PROJECTILE) && victim->testStatus(OBJECT_STATUS_BRAKING))
+	{
+		const Coord3D* pos = victim->getPosition();
+		const Coord3D* goal = ai->getGoalPosition();
+		Real dx = goal->x - pos->x;
+		Real dy = goal->y - pos->y;
+		Real dz = goal->z - pos->z;
+		Real dist = sqrtf(dx*dx + dy*dy + dz*dz);
+		Real speed = physics->getVelocityMagnitude();
+		if (speed > dist)
+			speed = dist;
+		vel->zero();
+		if (dist > 0.001f)
+		{
+			vel->x = dx * speed / dist;
+			vel->y = dy * speed / dist;
+			vel->z = dz * speed / dist;
+		}
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// Intercept triangle, solved frame by frame: the target flies on in a straight line at its current velocity (3D, so
+// a climb or dive counts), the interceptor flies at 'speed', gaining m_speedGain of its missing speed per frame once
+// 'coastFrames' have passed. The first frame at which the interceptor's reach covers the distance to the target's
+// predicted position is the intercept; the fraction within that frame is interpolated. The flying interceptor calls
+// this again every frame, so velocity changes (a dive) are followed. A missile on a ballistic arc (D-042) is predicted
+// along its arc instead, with the steps it will fly; the intercept must come before it lands.
+Bool WeaponTemplate::solveLeadIntercept(const Coord3D* from, Real speed, UnsignedInt coastFrames, UnsignedInt maxFrames,
+	const Object* victim, Coord3D* interceptPoint) const
+{
+	if (!m_leadProfile.m_valid || from == nullptr || victim == nullptr || interceptPoint == nullptr)
+		return FALSE;
+
+	Coord3D targetPos;
+	victim->getGeometryInfo().getCenterPosition(*victim->getPosition(), targetPos);
+	Coord3D vel;
+	getLeadTargetVelocity(victim, &vel);
+
+	const Real dx = targetPos.x - from->x;
+	const Real dy = targetPos.y - from->y;
+	const Real dz = targetPos.z - from->z;
+	const Real maxSpeed = m_leadProfile.m_maxSpeed;
+
+	// Hypersonic @feature ballistic arc (D-042): predict along the arc (centre = arc point + the current centre offset)
+	const MissileAIUpdate* arc = victim->getAI() != nullptr ? victim->getAI()->getMissileAIUpdate() : nullptr;
+	if (arc != nullptr && !arc->isOnBallisticArc())
+		arc = nullptr;
+	MissileAIUpdate::BallisticFlight arcFlight;	// D-051: climb, pitch-over and arc, stepped as the missile flies them
+	arcFlight.segment = MissileAIUpdate::BALLISTIC_ARC;
+	arcFlight.param = 0.0f;
+	arcFlight.speed = 0.0f;
+	arcFlight.speedFactor = 1.0f;
+	arcFlight.finalFactor = 0.0f;
+	arcFlight.finalIn = -1;
+	Coord3D arcOffset;
+	arcOffset.zero();
+	Coord3D prevArcPos = targetPos;
+	if (arc != nullptr)
+	{
+		arc->getBallisticFlight(&arcFlight);
+		arcOffset.x = targetPos.x - victim->getPosition()->x;
+		arcOffset.y = targetPos.y - victim->getPosition()->y;
+		arcOffset.z = targetPos.z - victim->getPosition()->z;
+	}
+
+	Real prevDist = sqrtf(dx*dx + dy*dy + dz*dz);
+	Real prevGap = prevDist;
+	Real reach = 0.0f;
+	for (UnsignedInt n = 1; n <= maxFrames; ++n)
+	{
+		if (n > coastFrames)
+			speed += (maxSpeed - speed) * m_leadProfile.m_speedGain;
+		reach += speed;
+
+		Real px, py, pz;
+		Coord3D arcPos;
+		if (arc != nullptr)
+		{
+			if (!arc->stepBallisticFlight(&arcFlight, &arcPos))
+				return FALSE;	// it lands before we can meet it
+			arcPos.x += arcOffset.x;
+			arcPos.y += arcOffset.y;
+			arcPos.z += arcOffset.z;
+			px = arcPos.x - from->x;
+			py = arcPos.y - from->y;
+			pz = arcPos.z - from->z;
+		}
+		else
+		{
+			const Real t = (Real)n;
+			px = dx + vel.x * t;
+			py = dy + vel.y * t;
+			pz = dz + vel.z * t;
+		}
+		const Real dist = sqrtf(px*px + py*py + pz*pz);
+		const Real gap = dist - reach;
+		if (gap <= 0.0f)
+		{
+			const Real frac = (prevGap > gap) ? prevGap / (prevGap - gap) : 1.0f;
+			if (arc != nullptr)
+			{
+				interceptPoint->x = prevArcPos.x + (arcPos.x - prevArcPos.x) * frac;
+				interceptPoint->y = prevArcPos.y + (arcPos.y - prevArcPos.y) * frac;
+				interceptPoint->z = prevArcPos.z + (arcPos.z - prevArcPos.z) * frac;
+			}
+			else
+			{
+				const Real tHit = (Real)(n - 1) + frac;
+				interceptPoint->x = targetPos.x + vel.x * tHit;
+				interceptPoint->y = targetPos.y + vel.y * tHit;
+				interceptPoint->z = targetPos.z + vel.z * tHit;
+			}
+
+			// the target reaches the ground before we can meet it
+			if (interceptPoint->z < TheTerrainLogic->getGroundHeight(interceptPoint->x, interceptPoint->y))
+				return FALSE;
+			return TRUE;
+		}
+
+		// The distance to a target on a straight line grows by a non-decreasing amount per frame, and the interceptor
+		// never flies faster than max(speed, maxSpeed): once the target recedes that fast, it can never be caught.
+		// (Not on a curved arc, which may turn back toward us; its steps end when it lands.)
+		if (arc == nullptr && dist - prevDist >= max(speed, maxSpeed))
+			return FALSE;
+
+		prevDist = dist;
+		prevGap = gap;
+		if (arc != nullptr)
+			prevArcPos = arcPos;
+	}
+	return FALSE;
+}
+
+//-------------------------------------------------------------------------------------------------
+Bool WeaponTemplate::solveLeadInterceptFromLauncher(const Object* launcher, const Object* victim, Coord3D* interceptPoint) const
+{
+	if (launcher == nullptr)
+		return FALSE;
+
+	Coord3D from;
+	launcher->getGeometryInfo().getCenterPosition(*launcher->getPosition(), from);
+	return solveLeadIntercept(&from, m_leadProfile.m_launchSpeed, m_leadProfile.m_ignitionFrames, m_leadProfile.m_maxFrames, victim, interceptPoint);
+}
+
+//-------------------------------------------------------------------------------------------------
+Real WeaponTemplate::getLeadInterceptSearchRange(Real attackRange) const
+{
+	const Real range = attackRange;
+	if (!m_leadProfile.m_valid)
+		return range;
+
+	// frames the interceptor needs to fly out to its attack range
+	Real speed = m_leadProfile.m_launchSpeed;
+	Real reach = 0.0f;
+	UnsignedInt n = 0;
+	while (n < m_leadProfile.m_maxFrames && reach < range)
+	{
+		++n;
+		if (n > m_leadProfile.m_ignitionFrames)
+			speed += (m_leadProfile.m_maxSpeed - speed) * m_leadProfile.m_speedGain;
+		reach += speed;
+	}
+	return range + LEAD_INTERCEPT_MAX_TARGET_SPEED * (Real)n;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature The scatter radius for a shot by this source: ScatterRadius, or the smallest ScatterRadiusUpgrade
+// radius whose upgrade the source's player has completed (Generals Hypersonic IRAN_DESIGN 7b Guidance I/II).
+Real WeaponTemplate::getScatterRadiusForSource(const Object* sourceObj) const
+{
+	Real radius = m_scatterRadius;
+	if (m_scatterRadiusUpgrades.empty() || sourceObj == nullptr || TheUpgradeCenter == nullptr)
+		return radius;
+
+	const Player* player = sourceObj->getControllingPlayer();
+	if (player == nullptr)
+		return radius;
+
+	for (ScatterRadiusUpgradeVec::const_iterator it = m_scatterRadiusUpgrades.begin(); it != m_scatterRadiusUpgrades.end(); ++it)
+	{
+		const UpgradeTemplate* upgrade = TheUpgradeCenter->findUpgrade(it->m_upgradeName);
+		DEBUG_ASSERTCRASH(upgrade, ("ScatterRadiusUpgrade %s not found in weapon %s!",it->m_upgradeName.str(),m_name.str()));
+		if (upgrade != nullptr && it->m_scatterRadius < radius && player->hasUpgradeComplete(upgrade))
+			radius = it->m_scatterRadius;
+	}
+	return radius;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature If the shot is aimed at an object that carries this weapon's ZeroScatterMarker (a StickyBombUpdate
+// object placed by the firer's player or an ally), return that object: the shot then lands on it with no scatter
+// (Generals Hypersonic IRAN_DESIGN 10b Target Designation). A shot at a position counts when the position lies
+// within the marked object's bounding circle.
+const Object* WeaponTemplate::findZeroScatterTarget(const Object* sourceObj, const Object* victimObj, const Coord3D* victimPos) const
+{
+	if (m_zeroScatterMarkerTmpl == nullptr || sourceObj == nullptr)
+		return nullptr;
+
+	const Coord3D* center = victimObj ? victimObj->getPosition() : victimPos;
+	if (center == nullptr)
+		return nullptr;
+
+	// Markers sit on their target's position; a position shot can be up to the target's bounding radius away.
+	const Real ZERO_SCATTER_SEARCH_RADIUS = 200.0f;
+	static const NameKeyType key_StickyBombUpdate = NAMEKEY("StickyBombUpdate");
+
+	SimpleObjectIterator* iter = ThePartitionManager->iterateObjectsInRange(center, ZERO_SCATTER_SEARCH_RADIUS, FROM_CENTER_2D, nullptr, ITER_SORTED_NEAR_TO_FAR);
+	MemoryPoolObjectHolder hold(iter);
+	for (Object* marker = iter->first(); marker != nullptr; marker = iter->next())
+	{
+		if (!marker->getTemplate()->isEquivalentTo(m_zeroScatterMarkerTmpl) || marker->isEffectivelyDead())
+			continue;
+
+		if (sourceObj->getRelationship(marker) != ALLIES)
+			continue;
+
+		const StickyBombUpdate* sticky = (const StickyBombUpdate*)marker->findUpdateModule(key_StickyBombUpdate);
+		if (sticky == nullptr)
+			continue;
+
+		const Object* target = sticky->getTargetObject();
+		if (target == nullptr || target->isEffectivelyDead())
+			continue;
+
+		if (victimObj != nullptr)
+		{
+			if (target == victimObj)
+				return target;
+			continue;
+		}
+
+		Real dx = target->getPosition()->x - victimPos->x;
+		Real dy = target->getPosition()->y - victimPos->y;
+		Real radius = target->getGeometryInfo().getBoundingCircleRadius();
+		if (dx * dx + dy * dy <= radius * radius)
+			return target;
+	}
+	return nullptr;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (Generals Hypersonic D-042) Where a strike at a ground position lands: the position shot of
+// fireWeaponTemplate (designation first, else the upgraded, optionally uniform scatter), done once up front for a
+// munition that flies to its impact point by itself (CruiseFlightUpdate).
+void WeaponTemplate::computeStrikeAimPoint(const Object* sourceObj, const Coord3D* pos, Coord3D* aim) const
+{
+	*aim = *pos;
+
+	const Object* designated = findZeroScatterTarget(sourceObj, nullptr, pos);
+	if (designated != nullptr)
+	{
+		*aim = *designated->getPosition();
+	}
+	else
+	{
+		Real scatterRadius = getScatterRadiusForSource(sourceObj);
+		if (scatterRadius > 0.0f)
+		{
+			if (m_scatterRadiusUniform)
+				scatterRadius *= sqrtf(GameLogicRandomValueReal(0.0f, 1.0f));
+			else
+				scatterRadius = GameLogicRandomValueReal(0, scatterRadius);
+			Real scatterAngleRadian = GameLogicRandomValueReal(0, 2*PI);
+			aim->x += scatterRadius * Cos(scatterAngleRadian);
+			aim->y += scatterRadius * Sin(scatterAngleRadian);
+		}
+	}
+	aim->z = TheTerrainLogic->getGroundHeight(aim->x, aim->y);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -528,6 +1026,32 @@ Real WeaponTemplate::getPrimaryDamage(const WeaponBonus& bonus) const
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature scaled explosions (Generals Hypersonic D-060): see Weapon.h. Clamped to 0.1 .. 4 so a stray
+// damage value cannot make an effect vanish or cover the map.
+Real WeaponTemplate::getDetonationFXScale(const FXList* fx, const WeaponBonus& bonus) const
+{
+	if (!m_scaleDetonationFX || fx == nullptr || fx->getReferenceDamage() <= 0.0f)
+		return 1.0f;
+
+	Real damage = getPrimaryDamage(bonus);
+	if (isClusterWeapon())
+	{
+		damage = m_clusterCount * m_clusterWeapon->getPrimaryDamage(bonus);
+		if (m_clusterCenterWeapon != nullptr)	// D-158: the centre warhead replaces one bomblet
+			damage += m_clusterCenterWeapon->getPrimaryDamage(bonus) - m_clusterWeapon->getPrimaryDamage(bonus);
+	}
+	if (damage <= 0.0f)
+		return 1.0f;
+
+	Real scale = sqrtf(damage / fx->getReferenceDamage());
+	if (scale < 0.1f)
+		scale = 0.1f;
+	if (scale > 4.0f)
+		scale = 4.0f;
+	return scale;
+}
+
+//-------------------------------------------------------------------------------------------------
 Real WeaponTemplate::getPrimaryDamageRadius(const WeaponBonus& bonus) const
 {
 	return m_primaryDamageRadius * bonus.getField(WeaponBonus::RADIUS);
@@ -543,6 +1067,19 @@ Real WeaponTemplate::getSecondaryDamage(const WeaponBonus& bonus) const
 Real WeaponTemplate::getSecondaryDamageRadius(const WeaponBonus& bonus) const
 {
 	return m_secondaryDamageRadius * bonus.getField(WeaponBonus::RADIUS);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature third ring (Generals Hypersonic D-222): the same DAMAGE and RADIUS bonuses as the secondary
+Real WeaponTemplate::getTertiaryDamage(const WeaponBonus& bonus) const
+{
+	return m_tertiaryDamage * bonus.getField(WeaponBonus::DAMAGE);
+}
+
+//-------------------------------------------------------------------------------------------------
+Real WeaponTemplate::getTertiaryDamageRadius(const WeaponBonus& bonus) const
+{
+	return m_tertiaryDamageRadius * bonus.getField(WeaponBonus::RADIUS);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -862,6 +1399,17 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 //	DEBUG_LOG(("WeaponTemplate::fireWeaponTemplate: firing weapon %s (source=%s, victim=%s)",
 //		m_name.str(),sourceObj->getTemplate()->getName().str(),victimObj?victimObj->getTemplate()->getName().str():"null"));
 
+	// Hypersonic @feature a SAM engaging an Iranian missile fires when the predicted intercept point is within range;
+	// the missile itself may still be outside it (D-038). Re-solve the intercept now and measure the range checks
+	// below to that point. No reachable intercept point: do not fire, as for a target out of range.
+	if( !ignoreRanges && !isProjectileDetonation && victimObj != nullptr && isLeadInterceptEngagement(victimObj) )
+	{
+		Coord3D interceptPoint;
+		if( !solveLeadInterceptFromLauncher(sourceObj, victimObj, &interceptPoint) )
+			return 0;
+		distSqr = ThePartitionManager->getDistanceSquared(sourceObj, &interceptPoint, ATTACK_RANGE_CALC_TYPE);
+	}
+
 	//Only perform this check if the weapon isn't a leech range weapon (which can have unlimited range!)
 	if( !ignoreRanges && !isLeechRangeWeapon() )
 	{
@@ -919,6 +1467,9 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		Real reDir = reAngle != 0.0f ? (atan2(victimPos->y - sourcePos->y, victimPos->x - sourcePos->x)) : 0.0f;
 		VeterancyLevel v = sourceObj->getVeterancyLevel();
 		const FXList* fx = isProjectileDetonation ? getProjectileDetonateFX(v) : getFireFX(v);
+		// Hypersonic @feature (D-060) a scaled detonation FX: every nugget played below scales by the blast's size
+		// Hypersonic @feature (D-148) FXScale sizes the FireFX and the detonation FX alike
+		FXList::ScaleScope fxScale((isProjectileDetonation ? getDetonationFXScale(fx, bonus) : 1.0f) * m_fxScale);
 
 		if ( TheGameLogic->getFrame() < firingWeapon->getSuspendFXFrame() )
 			fx = nullptr;
@@ -933,6 +1484,10 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 			)
 		{
 			handled = TRUE;		// then let's just pretend like we did the fx by returning true
+		}
+		else if (m_fxAtTarget)
+		{
+			handled = FALSE;	// Hypersonic @feature (D-148) played below at the target point, not by the source's drawable
 		}
 		else
 		{
@@ -951,8 +1506,9 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		{
 			// bah. just play it at the drawable's pos.
 			//DEBUG_LOG(("*** WeaponFireFX not fully handled by the client"));
-			const Coord3D* where = isContactWeapon() ? &targetPos : sourceObj->getDrawable()->getPosition();
-			FXList::doFXPos(fx, where, sourceObj->getDrawable()->getTransformMatrix(), getWeaponSpeed(), &targetPos, getPrimaryDamageRadius(bonus));
+			const Coord3D* where = (isContactWeapon() || m_fxAtTarget) ? &targetPos : sourceObj->getDrawable()->getPosition();
+			const Matrix3D* mtx = m_fxAtTarget ? nullptr : sourceObj->getDrawable()->getTransformMatrix();	// D-148
+			FXList::doFXPos(fx, where, mtx, getWeaponSpeed(), &targetPos, getPrimaryDamageRadius(bonus));
 		}
 	}
 
@@ -967,11 +1523,22 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 
 	Coord3D projectileDestination = *victimPos; //Need to copy this, as we have a pointer to their actual position
 	Real scatterRadius = 0.0f;
-	if( m_scatterRadius > 0.0f || (m_infantryInaccuracyDist > 0.0f && victimObj && victimObj->isKindOf( KINDOF_INFANTRY )) )
+
+	// Hypersonic @feature Strike accuracy (Generals Hypersonic IRAN_DESIGN 7b, 10b): player upgrades can tighten the
+	// scatter, and a target designated for the firer is hit with no scatter at all. Without the new weapon fields
+	// this is the stock scatter radius and no designated target.
+	const Real baseScatterRadius = getScatterRadiusForSource( sourceObj );
+	const Object *zeroScatterTarget = findZeroScatterTarget( sourceObj, victimObj, victimPos );
+	if( zeroScatterTarget != nullptr )
+	{
+		// A position shot is moved onto the designated object; an object shot already aims at it.
+		projectileDestination = *zeroScatterTarget->getPosition();
+	}
+	else if( baseScatterRadius > 0.0f || (m_infantryInaccuracyDist > 0.0f && victimObj && victimObj->isKindOf( KINDOF_INFANTRY )) )
 	{
 		// This weapon scatters, so clear the victimObj, as we are no longer shooting it directly,
 		// and find a random point within the radius to shoot at as victimPos
-		scatterRadius = m_scatterRadius;
+		scatterRadius = baseScatterRadius;
 
 		// if it's an object, aim at the center, not the ground part (srj)
 		PathfindLayerEnum targetLayer = LAYER_GROUND;
@@ -993,7 +1560,16 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		//victimObj = nullptr; // his position is already in victimPos, if he existed
 
 		//Randomize the scatter radius (sometimes it can be more accurate than others)
-		scatterRadius = GameLogicRandomValueReal( 0, scatterRadius );
+		if( m_scatterRadiusUniform )
+		{
+			// Hypersonic @feature uniform over the disc area: the square root of the random radius fraction
+			// (a plain random radius clusters the points toward the centre).
+			scatterRadius *= sqrtf( GameLogicRandomValueReal( 0.0f, 1.0f ) );
+		}
+		else
+		{
+			scatterRadius = GameLogicRandomValueReal( 0, scatterRadius );
+		}
 		Real scatterAngleRadian = GameLogicRandomValueReal( 0, 2*PI );
 
 		Coord3D firingOffset;
@@ -1049,6 +1625,11 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		}
 
 		const Coord3D* damagePos = getDamageDealtAtSelfPosition() ? sourcePos : victimPos;
+		// Hypersonic @bugfix split warhead (D-062): the split launches its warheads from the bursting carrier, so it must
+		// happen now, while the carrier exists; a delayed split (apex far from the aim point) found no carrier and fell
+		// back to the D-048 ground bomblets.
+		if (isClusterWeapon() && m_clusterWeapon->getProjectileTemplate() != nullptr)
+			delayInFrames = 0.0f;
 		if (delayInFrames < 1.0f)
 		{
 			// go ahead and do it now
@@ -1158,7 +1739,8 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		}
 
 		//If we're launching a missile at a unit with valid countermeasures, then communicate it
-		if( projectile->isKindOf( KINDOF_SMALL_MISSILE ) && victimObj && victimObj->hasCountermeasures() )
+		// Hypersonic @feature (D-055): a weapon with IgnoresCountermeasures never reports its missile, so it is not diverted
+		if( projectile->isKindOf( KINDOF_SMALL_MISSILE ) && !m_ignoresCountermeasures && victimObj && victimObj->hasCountermeasures() )
 		{
 			const AIUpdateInterface *ai = victimObj->getAI();
 			//Only allow jets not currently supersonic to launch countermeasures
@@ -1334,6 +1916,179 @@ void WeaponTemplate::processHistoricDamage(const Object* source, const Coord3D* 
 #endif
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature split warhead (Generals Hypersonic D-062): a cluster weapon whose ClusterWeapon has a
+// ProjectileObject releases that many warhead projectiles from the carrier (the detonating missile, bursting in the air)
+// at once. Landing points: one near the centre, the others evenly round a ring at 85-100% of ClusterRadius (random turn,
+// small jitter); then each warhead misses its point by its own random amount within the warhead weapon's ScatterRadius
+// (sideways at most half the ring spacing, so two rarely land on one spot); all synced random. Landing times: nearest
+// to the carrier first (horizontally), then outward, aiming at ClusterDelay / (count - 1) apart, the first as soon as
+// no warhead has to fly faster than the warhead weapon's speed; no warhead flies slower than 75% of it (a short drop
+// then lands its warheads closer together in time). Each warhead flies its path in exactly its time
+// (projectileSetFlightFrames; with DumbProjectileBehavior BallisticDrop, the carrier's own ballistic descent from the
+// split, fanned out to each warhead's point). The warheads are ordinary projectiles:
+// launched by the carrier (its weapon bonus conditions, e.g. Improved Warheads, pass on), produced by and crediting
+// 'launcherID' (the silo) when it still exists; each detonates with the warhead weapon where it lands.
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-158) with a 'centerWeapon' the first warhead is that weapon's projectile, aimed exactly at the
+// centre (only its own ScatterRadius, no ring); the other count - 1 form the ring as before.
+static void launchClusterWarheads(const WeaponTemplate* warheadWeapon, Int count, Real radius, UnsignedInt spreadFrames,
+	const Object* carrier, ObjectID launcherID, const Coord3D* center, const WeaponTemplate* centerWeapon)
+{
+	const ThingTemplate* tmpl = warheadWeapon->getProjectileTemplate();
+	if (centerWeapon != nullptr && centerWeapon->getProjectileTemplate() == nullptr)
+		centerWeapon = nullptr;
+	Player* owner = carrier->getControllingPlayer();
+	if (tmpl == nullptr || owner == nullptr || count <= 0)
+		return;
+	enum { MAX_WARHEADS = 64 };
+	if (count > MAX_WARHEADS)
+		count = MAX_WARHEADS;
+	const Coord3D from = *carrier->getPosition();
+	const Real speed = max(1.0f, warheadWeapon->getWeaponSpeed());
+	Object* launcher = TheGameLogic->findObjectByID(launcherID);
+
+	Coord3D points[MAX_WARHEADS];
+	Int order[MAX_WARHEADS];
+	const Real turn = GameLogicRandomValueReal(0.0f, 2.0f * PI);
+	const Int ringCount = count > 1 ? count - 1 : 1;
+	const Real ringScatter = warheadWeapon->getScatterRadius();
+	Real dist[MAX_WARHEADS];
+	Int i;
+	for (i = 0; i < count; ++i)
+	{
+		Real r, a;
+		Real scatter = ringScatter;
+		if (i == 0 && centerWeapon != nullptr)
+		{
+			r = 0.0f;	// D-158: the centre warhead on the aim point
+			a = 0.0f;
+			scatter = centerWeapon->getScatterRadius();
+		}
+		else if (i == 0)
+		{
+			r = radius * GameLogicRandomValueReal(0.0f, 0.08f);
+			a = GameLogicRandomValueReal(0.0f, 2.0f * PI);
+		}
+		else
+		{
+			r = radius * GameLogicRandomValueReal(0.85f, 1.0f);
+			a = turn + 2.0f * PI * (Real)(i - 1) / (Real)ringCount + GameLogicRandomValueReal(-0.04f, 0.04f);
+		}
+		// each warhead's own miss (owner, D-062): uniform in the warhead weapon's ScatterRadius disc; on the ring its
+		// sideways part is kept within half the ring spacing, so neighbours rarely land on one spot
+		Real dr = 0.0f;
+		Real dt = 0.0f;
+		if (scatter > 0.0f)
+		{
+			const Real sr = scatter * sqrtf(GameLogicRandomValueReal(0.0f, 1.0f));
+			const Real sa = GameLogicRandomValueReal(0.0f, 2.0f * PI);
+			dr = sr * Cos(sa);
+			dt = sr * Sin(sa);
+			if (i > 0)
+			{
+				const Real limit = 0.5f * 2.0f * r * (Real)fabs(Sin(PI / (Real)ringCount));
+				if (dt > limit)
+					dt = limit;
+				else if (dt < -limit)
+					dt = -limit;
+			}
+		}
+		points[i].x = center->x + (r + dr) * Cos(a) - dt * Sin(a);
+		points[i].y = center->y + (r + dr) * Sin(a) + dt * Cos(a);
+		points[i].z = TheTerrainLogic->getGroundHeight(points[i].x, points[i].y);
+		order[i] = i;
+		Coord3D d;
+		d.x = points[i].x - from.x;
+		d.y = points[i].y - from.y;
+		d.z = 0.0f;
+		dist[i] = d.length();	// horizontal: the flight speed is the horizontal speed (ballistic drop)
+	}
+	// nearest first (insertion sort: stable, deterministic)
+	for (i = 1; i < count; ++i)
+	{
+		const Int t = order[i];
+		Int j = i - 1;
+		while (j >= 0 && dist[order[j]] > dist[t])
+		{
+			order[j + 1] = order[j];
+			--j;
+		}
+		order[j + 1] = t;
+	}
+
+	// the first landing: when no warhead has to fly faster than 'speed'
+	const Real gap = count > 1 ? (Real)spreadFrames / (Real)(count - 1) : 0.0f;
+	Real first = 1.0f;
+	for (i = 0; i < count; ++i)
+		first = max(first, dist[order[i]] / speed - (Real)i * gap);
+	const UnsignedInt firstFrames = (UnsignedInt)REAL_TO_INT_CEIL(first) + 1;
+	const Real MIN_SPEED_FRACTION = 0.75f;
+	for (Int k = 0; k < count; ++k)
+	{
+		const Bool isCenter = (centerWeapon != nullptr && order[k] == 0);	// D-158
+		const WeaponTemplate* weapon = isCenter ? centerWeapon : warheadWeapon;
+		Object* warhead = TheThingFactory->newObject(isCenter ? centerWeapon->getProjectileTemplate() : tmpl, owner->getDefaultTeam());
+		warhead->setProducer(launcher != nullptr ? (const Object*)launcher : carrier);
+		ProjectileUpdateInterface* pui = nullptr;
+		for (BehaviorModule** u = warhead->getBehaviorModules(); *u; ++u)
+		{
+			if ((pui = (*u)->getProjectileUpdateInterface()) != nullptr)
+				break;
+		}
+		if (pui == nullptr)
+		{
+			TheGameLogic->destroyObject(warhead);
+			continue;
+		}
+		pui->projectileLaunchAtObjectOrPosition(nullptr, &points[order[k]], carrier, PRIMARY_WEAPON, 0, weapon, nullptr);
+		UnsignedInt frames = firstFrames + (UnsignedInt)REAL_TO_INT_FLOOR((Real)k * gap + 0.5f);
+		const UnsignedInt slowest = (UnsignedInt)REAL_TO_INT_FLOOR(dist[order[k]] / (MIN_SPEED_FRACTION * speed)) + 1;
+		if (frames > slowest)
+			frames = max(slowest, (UnsignedInt)2);
+		pui->projectileSetFlightFrames(frames);
+		if (launcher != nullptr)
+			warhead->getExperienceTracker()->setExperienceSink(launcher->getID());
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature one-by-one release (Generals Hypersonic D-162): one warhead of this cluster weapon, launched from the
+// carrier (its weapon bonus conditions pass on, e.g. Improved Warheads) to 'point', flying its ballistic drop in
+// exactly 'frames' frames and leaving with the carrier's vertical speed; produced by and crediting the launcher (the
+// silo) when it still exists, like launchClusterWarheads.
+//-------------------------------------------------------------------------------------------------
+void WeaponTemplate::releaseClusterWarhead(const Object* carrier, ObjectID launcherID, const Coord3D* point, UnsignedInt frames, Real startVZ, const Coord3D* startVel) const
+{
+	if (!isClusterWeapon() || carrier == nullptr || point == nullptr)
+		return;
+	const ThingTemplate* tmpl = m_clusterWeapon->getProjectileTemplate();
+	Player* owner = carrier->getControllingPlayer();
+	if (tmpl == nullptr || owner == nullptr)
+		return;
+	Object* launcher = TheGameLogic->findObjectByID(launcherID);
+	Object* warhead = TheThingFactory->newObject(tmpl, owner->getDefaultTeam());
+	warhead->setProducer(launcher != nullptr ? (const Object*)launcher : carrier);
+	ProjectileUpdateInterface* pui = nullptr;
+	for (BehaviorModule** u = warhead->getBehaviorModules(); *u; ++u)
+	{
+		if ((pui = (*u)->getProjectileUpdateInterface()) != nullptr)
+			break;
+	}
+	if (pui == nullptr)
+	{
+		TheGameLogic->destroyObject(warhead);
+		return;
+	}
+	pui->projectileLaunchAtObjectOrPosition(nullptr, point, carrier, PRIMARY_WEAPON, 0, m_clusterWeapon, nullptr);
+	pui->projectileSetStartVerticalSpeed(startVZ);
+	pui->projectileSetFlightFrames(max(frames, (UnsignedInt)2));
+	if (startVel != nullptr)	// Hypersonic @feature cone release (D-267)
+		pui->projectileSetStartHorizontalSpeed(startVel->x, startVel->y);
+	if (launcher != nullptr)
+		warhead->getExperienceTracker()->setExperienceSink(launcher->getID());
+}
+
+//-------------------------------------------------------------------------------------------------
 void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, const Coord3D *pos, const WeaponBonus& bonus, Bool isProjectileDetonation) const
 {
 	if (sourceID == 0)	// must have a source
@@ -1355,6 +2110,50 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 		pos = primaryVictim->getPosition();
 	}
 
+	// Hypersonic @feature cluster warhead (Generals Hypersonic D-048): instead of one blast, spread ClusterCount bomblets
+	// evenly over the ClusterRadius disc around 'pos' (a golden-angle spiral with a random turn and jitter: every ring of
+	// the disc gets its share, synced random), each landing at a random frame within ClusterDelay. They are not objects:
+	// each is a delayed ClusterWeapon blast (its damage, radius and ProjectileDetonationFX) with this shot's bonus
+	// (Improved Warheads), dealt by the launcher of the projectile (the projectile is gone by then).
+	if (isClusterWeapon() && pos != nullptr && TheWeaponStore != nullptr)
+	{
+		ObjectID bombletSourceID = sourceID;
+		if (source != nullptr && source->isKindOf(KINDOF_PROJECTILE))
+		{
+			for (BehaviorModule** u = source->getBehaviorModules(); *u; ++u)
+			{
+				ProjectileUpdateInterface* pui = (*u)->getProjectileUpdateInterface();
+				if (pui != nullptr)
+				{
+					if (TheGameLogic->findObjectByID(pui->projectileGetLauncherID()) != nullptr)
+						bombletSourceID = pui->projectileGetLauncherID();
+					break;
+				}
+			}
+		}
+		// Hypersonic @feature split warhead (D-062): projectile warheads fly from the bursting carrier to their points
+		if (m_clusterWeapon->getProjectileTemplate() != nullptr && source != nullptr)
+		{
+			launchClusterWarheads(m_clusterWeapon, m_clusterCount, m_clusterRadius, m_clusterDelay, source, bombletSourceID, pos, m_clusterCenterWeapon);
+			return;
+		}
+		const Real GOLDEN_ANGLE = 2.39996323f;
+		const Real turn = GameLogicRandomValueReal(0.0f, 2.0f * PI);
+		const UnsignedInt now = TheGameLogic->getFrame();
+		for (Int i = 0; i < m_clusterCount; ++i)
+		{
+			const Real ring = sqrtf(((Real)i + GameLogicRandomValueReal(0.0f, 1.0f)) / (Real)m_clusterCount);
+			const Real angle = turn + GOLDEN_ANGLE * (Real)i + GameLogicRandomValueReal(-0.3f, 0.3f);
+			Coord3D bomblet;
+			bomblet.x = pos->x + m_clusterRadius * ring * Cos(angle);
+			bomblet.y = pos->y + m_clusterRadius * ring * Sin(angle);
+			bomblet.z = TheTerrainLogic->getGroundHeight(bomblet.x, bomblet.y);
+			const UnsignedInt when = now + 1 + (UnsignedInt)GameLogicRandomValue(0, (Int)m_clusterDelay);
+			TheWeaponStore->setDelayedDamage(m_clusterWeapon, &bomblet, when, bombletSourceID, INVALID_ID, bonus, TRUE);
+		}
+		return;
+	}
+
 	DamageType damageType = getDamageType();
 	DeathType deathType = getDeathType();
 	ObjectStatusTypes damageStatusType = getDamageStatusType();
@@ -1368,12 +2167,20 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 		Real secondaryRadius = getSecondaryDamageRadius(bonus);
 		Real primaryDamage = getPrimaryDamage(bonus);
 		Real secondaryDamage = getSecondaryDamage(bonus);
+		// Hypersonic @feature third ring (Generals Hypersonic D-222): beyond the secondary radius, within this one
+		Real tertiaryRadius = getTertiaryDamageRadius(bonus);
+		Real tertiaryDamage = getTertiaryDamage(bonus);
 		Int affects = getAffectsMask();
 
 		DEBUG_ASSERTCRASH(secondaryRadius >= primaryRadius || secondaryRadius == 0.0f, ("secondary radius should be >= primary radius (or zero)"));
 
 		Real primaryRadiusSqr = sqr(primaryRadius);
 		Real radius = max(primaryRadius, secondaryRadius);
+		Real tertiaryInnerSqr = sqr(radius);	// Hypersonic @feature (D-222): the third ring starts where the others end
+		if (tertiaryRadius > radius)
+			radius = tertiaryRadius;
+		else
+			tertiaryRadius = 0.0f;
 		if (radius > 0.0f)
 		{
 			iter = ThePartitionManager->iterateObjectsInRange(pos, radius, DAMAGE_RANGE_CALC_TYPE);
@@ -1532,6 +2339,8 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 			// note, don't bother with damage multipliers here...
 			// that's handled internally by the attemptDamage() method.
 			damageInfo.in.m_amount = (curVictimDistSqr <= primaryRadiusSqr) ? primaryDamage : secondaryDamage;
+			if (tertiaryRadius > 0.0f && curVictimDistSqr > tertiaryInnerSqr)
+				damageInfo.in.m_amount = tertiaryDamage;	// Hypersonic @feature third ring (D-222)
 
 			if( killSelf )
 			{
@@ -1546,6 +2355,46 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 				//	Real curVictimHealth = curVictim->getBodyModule()->getHealth();
 				//	damageInfo.in.m_amount = __max( damageInfo.in.m_amount, curVictimHealth );
 				//}
+			}
+
+			// Hypersonic @feature Interception rules (Generals Hypersonic IRAN_DESIGN 7c): every shot that would damage an
+			// object with an active HitChanceBehavior rolls its hit chance (synced random) and does nothing to it on a
+			// miss. A SAM-class hit on a target marked SAMHitIsLethal destroys it regardless of its health.
+			if( !killSelf && curVictim != source && (curVictim->isKindOf( KINDOF_PROJECTILE ) || curVictim->isAirborneTarget()) )
+			{
+				// D-245 Update 8: a vanished carrier cannot roll an interception or award a kill during KILL_SELF.
+				// Regular self-killing missiles are not MASKED, so their impact behavior stays unchanged.
+				if( curVictim->testStatus( OBJECT_STATUS_MISSILE_KILLING_SELF ) && curVictim->testStatus( OBJECT_STATUS_MASKED ) )
+					continue;
+				const HitChanceBehavior *hitChance = HitChanceBehavior::findHitChanceBehavior( curVictim );
+				if( hitChance != nullptr && hitChance->isActive() )
+				{
+					// Hypersonic @feature (D-059) Point Defense Laser shots roll the target's LaserHitChance
+					// Hypersonic (D-195, owner: drones die fastest to China's gun, then the Patriot, then GLA; only the
+					// interception odds change, not the defense): the weapon's DroneHitChanceScale at an Iran drone,
+					// MissileHitChanceScale at an Iran missile (2026-10-21: one hit kills, a lower chance per shot, so guns scale
+					// with their numbers like SAMs instead of adding up hits)
+					if( !hitChance->rollHit( m_interceptorClass == INTERCEPTOR_LASER,
+							hitChance->isSAMHitLethal() ? m_missileHitChanceScale : m_droneHitChanceScale ) )
+						continue;
+
+					// Hypersonic (D-195, owner 2026-10-20: missile defense Patriot > China's gun > GLA): a weapon with
+					// MissileHitsToKill N destroys an Iran missile (SAMHitIsLethal) with its N-th hit, whatever its class:
+					// each hit takes 1/N of the missile's max health, unresisted (ProjectileArmor would quarter it)
+					BodyModuleInterface *missileBody = hitChance->isSAMHitLethal() ? curVictim->getBodyModule() : nullptr;
+					if( m_missileHitsToKill > 0 && missileBody != nullptr )
+					{
+						damageInfo.in.m_damageType = DAMAGE_UNRESISTABLE;
+						damageInfo.in.m_amount = missileBody->getMaxHealth() / (Real)m_missileHitsToKill + 0.01f;
+					}
+					else if( m_interceptorClass == INTERCEPTOR_SAM && hitChance->isSAMHitLethal() )
+						damageInfo.in.m_amount = HUGE_DAMAGE_AMOUNT;
+				}
+				// Hypersonic @feature (D-147) the weapon's own HitChance (e.g. the Bavar-373's 90%) for targets without one
+				else if( m_hitChance < 1.0f && !(GameLogicRandomValueReal( 0.0f, 1.0f ) < m_hitChance) )
+				{
+					continue;
+				}
 			}
 
 			// if the damage-dealer is a projectile, designate the damage as done by its launcher, not the projectile.
@@ -1702,6 +2551,13 @@ void WeaponStore::update()
 		{
 			// we never do projectile-detonation-damage via this code path.
 			const Bool isProjectileDetonation = false;
+			// Hypersonic @feature a cluster bomblet (D-048) plays its detonation FX where it lands
+			if (ddi->m_playDetonationFX)
+			{
+				const FXList* fx = ddi->m_delayedWeapon->getProjectileDetonateFX(LEVEL_REGULAR);
+				FXList::ScaleScope fxScale(ddi->m_delayedWeapon->getDetonationFXScale(fx, ddi->m_bonus) * ddi->m_delayedWeapon->getFXScale());	// D-060, D-148
+				FXList::doFXPos(fx, &ddi->m_delayDamagePos);
+			}
 			ddi->m_delayedWeapon->dealDamageInternal(ddi->m_delaySourceID, ddi->m_delayIntendedVictimID, &ddi->m_delayDamagePos, ddi->m_bonus, isProjectileDetonation);
 			ddi = m_weaponDDI.erase(ddi);
 		}
@@ -1750,7 +2606,7 @@ void WeaponStore::reset()
 }
 
 //-------------------------------------------------------------------------------------------------
-void WeaponStore::setDelayedDamage(const WeaponTemplate *weapon, const Coord3D* pos, UnsignedInt whichFrame, ObjectID sourceID, ObjectID victimID, const WeaponBonus& bonus)
+void WeaponStore::setDelayedDamage(const WeaponTemplate *weapon, const Coord3D* pos, UnsignedInt whichFrame, ObjectID sourceID, ObjectID victimID, const WeaponBonus& bonus, Bool playDetonationFX)
 {
 	WeaponDelayedDamageInfo wi;
 	wi.m_delayedWeapon = weapon;
@@ -1759,6 +2615,7 @@ void WeaponStore::setDelayedDamage(const WeaponTemplate *weapon, const Coord3D* 
 	wi.m_delaySourceID = sourceID;
 	wi.m_delayIntendedVictimID = victimID;
 	wi.m_bonus = bonus;
+	wi.m_playDetonationFX = playDetonationFX;
 	m_weaponDDI.push_back(wi);
 }
 
@@ -2258,6 +3115,17 @@ Bool Weapon::isWithinAttackRange(const Object *source, const Coord3D* pos) const
 //-------------------------------------------------------------------------------------------------
 Bool Weapon::isWithinAttackRange(const Object *source, const Object *target) const
 {
+	// Hypersonic @feature SAM early launch (Generals Hypersonic D-038): against an Iranian missile, a SAM-class missile
+	// weapon is "in range" when the predicted intercept point is within its attack range, and never when no reachable
+	// intercept point exists (receding or crossing too fast, or the intercept lies beyond its range or flight time).
+	if( m_template->isLeadInterceptEngagement( target ) )
+	{
+		Coord3D interceptPoint;
+		if( !m_template->solveLeadInterceptFromLauncher( source, target, &interceptPoint ) )
+			return false;
+		return isWithinAttackRange( source, &interceptPoint );
+	}
+
 	Real distSqr;
 	Real attackRangeSqr = sqr(getAttackRange(source));
 
@@ -2917,7 +3785,8 @@ Bool Weapon::isDamageWeapon() const
 
 	//Use no bonus
 	WeaponBonus whoCares;
-	if( m_template->getPrimaryDamage( whoCares ) > 0.0f || m_template->getSecondaryDamage( whoCares ) > 0.0f )
+	if( m_template->getPrimaryDamage( whoCares ) > 0.0f || m_template->getSecondaryDamage( whoCares ) > 0.0f
+		|| m_template->getTertiaryDamage( whoCares ) > 0.0f )	// Hypersonic @feature (D-222)
 	{
 		return TRUE;
 	}
@@ -3038,6 +3907,20 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 			worldPos.x = tmp.X;
 			worldPos.y = tmp.Y;
 			worldPos.z = tmp.Z;
+
+			// Hypersonic @bugfix enclosed garrison launch height: a rider enclosed in a structure (e.g. a Drone Operator in
+			// the Dehlavieh bunker) stands at the structure's centre at ground level, so its projectile started on the
+			// terrain and slid up a rising slope until a bump detonated it. Launch from the structure's roof instead.
+			const Object *container = launcher->getContainedBy();
+			if( container->isKindOf( KINDOF_STRUCTURE ) )
+			{
+				Real roof = container->getPosition()->z + container->getGeometryInfo().getMaxHeightAbovePosition();
+				if( roof > worldPos.z )
+				{
+					worldPos.z = roof;
+					worldTransform.Set_Z_Translation( roof );
+				}
+			}
 			return;
 		}
 	}

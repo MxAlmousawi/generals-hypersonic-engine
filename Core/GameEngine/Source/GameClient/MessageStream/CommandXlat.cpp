@@ -67,6 +67,9 @@
 #include "GameClient/SelectionXlat.h"
 
 #include "GameLogic/Module/AIUpdate.h"
+#if RTS_ZEROHOUR
+#include "GameLogic/Module/JetAIUpdate.h"
+#endif
 #include "GameLogic/ExperienceTracker.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Module/BodyModule.h"
@@ -1176,7 +1179,11 @@ GameMessage::Type CommandTranslator::issueSpecialPowerCommand( const CommandButt
 	Drawable* sourceDraw = ignoreSelObj ? ignoreSelObj->getDrawable() : TheInGameUI->getFirstSelectedDrawable();
 	ObjectID specificSource = ignoreSelObj ? ignoreSelObj->getID() : INVALID_ID;
 
-	if( BitIsSet( command->getOptions(), COMMAND_OPTION_NEED_OBJECT_TARGET ) )
+	if( BitIsSet( command->getOptions(), COMMAND_OPTION_NEED_OBJECT_TARGET )
+#if RTS_ZEROHOUR
+		&& (target || command->getSpecialPowerTemplate()->getSpecialPowerType() != SPECIAL_IRAN_ALMAS_STRIKE)
+#endif
+	)
 	{
 		// OBJECT BASED SPECIAL
 		if (!command->isValidObjectTarget(sourceDraw, target))
@@ -1740,7 +1747,10 @@ GameMessage::Type CommandTranslator::handleGuiCommand( const CommandButton *comm
 			// null out the GUI command if we're actually doing something
 			if( type == DO_COMMAND )
 			{
-				TheInGameUI->setGUICommand( nullptr );
+				// Hypersonic @feature (D-046): a launch button stays armed while another munition of its type is
+				// ready (this launch still counts until the logic runs it); ControlBar::update ends it otherwise.
+				if( !ControlBar::isStickyLaunchCommand( command ) || ControlBar::countReadyLaunches( command ) <= 1 )
+					TheInGameUI->setGUICommand( nullptr );
 			}
 
 		}
@@ -3110,6 +3120,15 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 			for( DrawableListCIt it = drawList->begin(); it != drawList->end(); ++it )
 			{
 				draw = *it;
+#if RTS_ZEROHOUR
+				const Object* obj = draw->getObject();
+				const JetAIUpdate* jet = obj && obj->getAI() ? obj->getAI()->getJetAIUpdate() : nullptr;
+				if (jet && jet->isGazaGuarding())
+				{
+					TheInGameUI->deselectAllDrawables();
+					break;
+				}
+#endif
 				if( selectAircraft && (draw->isAnyKindOf( disqualifyingKindofs ) || !draw->isKindOf( KINDOF_AIRCRAFT )) )
 				{
 					TheInGameUI->deselectAllDrawables();
@@ -3312,6 +3331,19 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 
 		//-----------------------------------------------------------------------------------------
 		case GameMessage::MSG_META_OPTIONS:
+
+			// Hypersonic @feature (D-046): Esc first leaves an armed launch salvo, like a right click.
+			// While the quit menu is open (e.g. opened by the Options button), Esc closes the menu as stock
+			// and the launch mode is dropped with it.
+			if( ControlBar::isStickyLaunchCommand( TheInGameUI->getGUICommand() ) )
+			{
+				TheInGameUI->setGUICommand( nullptr );
+				if( !TheInGameUI->isQuitMenuVisible() )
+				{
+					disp = DESTROY_MESSAGE;
+					break;
+				}
+			}
 
 			ToggleQuitMenu();
 			disp = DESTROY_MESSAGE;

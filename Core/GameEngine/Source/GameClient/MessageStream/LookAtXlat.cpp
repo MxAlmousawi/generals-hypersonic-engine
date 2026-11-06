@@ -97,6 +97,42 @@ void LookAtTranslator::setScrolling(ScrollType scrollType)
 }
 
 //-----------------------------------------------------------------------------
+// Hypersonic @feature (Generals Hypersonic D-258): Ctrl + mouse wheel / Ctrl + middle-click change the camera zoom-out
+// limit (OptionPreferences, D-223 choices), only while the player may move the camera: not in the main-menu shell map,
+// not while input is disabled (cinematics) and not while the camera is locked (recorded-camera replays). Client only.
+Bool LookAtTranslator::canChangeZoomOut() const
+{
+	if( TheGameLogic == nullptr || TheGameLogic->isInShellGame() || TheTacticalView == nullptr )
+		return false;
+	if( TheInGameUI == nullptr || !TheInGameUI->getInputEnabled() )
+		return false;
+	return !TheTacticalView->isUserControlLocked();
+}
+
+void LookAtTranslator::changeZoomOut( Real height )
+{
+	if( height == TheGlobalData->m_maxCameraHeight )
+		return;
+	OptionPreferences::applyCameraZoomOut( height );
+	TheTacticalView->userSetZoomToDefault();	// height = the new limit at once (also shows a raised limit)
+	// saved and announced once the player stops (MSG_FRAME_TICK): no Options.ini rewrite and no message per notch
+	m_zoomOutChangePending = true;
+	m_zoomOutPendingHeight = height;
+	m_zoomOutChangeTimeMsec = timeGetTime();
+}
+
+void LookAtTranslator::flushZoomOutChange()
+{
+	if( !m_zoomOutChangePending )
+		return;
+	m_zoomOutChangePending = false;
+	OptionPreferences::saveCameraZoomOut( m_zoomOutPendingHeight );
+	if( TheInGameUI != nullptr && TheGameText != nullptr )
+		TheInGameUI->messageNoFormat( TheGameText->FETCH_OR_SUBSTITUTE_FORMAT( "GUI:HypersonicCameraZoomOutNow",
+			L"Camera zoom-out: %d (Ctrl + mouse wheel; Ctrl + middle-click: default)", (Int)m_zoomOutPendingHeight ) );
+}
+
+//-----------------------------------------------------------------------------
 void LookAtTranslator::stopScrolling()
 {
 	m_isScrolling = false;
@@ -141,6 +177,10 @@ LookAtTranslator::LookAtTranslator() :
 	m_middleButtonDownTimeMsec(0),
 	m_lastPlaneID(INVALID_DRAWABLE_ID),
 	m_lastMouseMoveTimeMsec(0),
+	m_zoomOutWheelSpin(0.0f),
+	m_zoomOutChangePending(false),
+	m_zoomOutPendingHeight(0.0f),
+	m_zoomOutChangeTimeMsec(0),
 	m_scrollType(SCROLL_NONE)
 {
 	m_anchor.x = m_anchor.y = 0;
@@ -317,6 +357,9 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 			// if middle button is "clicked", reset to "home" orientation
 			if (!didMove && elapsedMsec < CLICK_DURATION_MSEC)
 			{
+				// Hypersonic @feature (D-258): Ctrl + middle-click also puts the zoom-out limit back to the default
+				if ((msg->getArgument( 1 )->integer & KEY_STATE_CONTROL) && canChangeZoomOut())
+					changeZoomOut(OptionPreferences::getCameraZoomOutChoice(OptionPreferences::getCameraZoomOutDefaultIndex()));
 				TheTacticalView->userResetPivotToGround();
 				TheTacticalView->userSetAngleToDefault();
 				TheTacticalView->userSetPitchToDefault();
@@ -418,6 +461,25 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 			m_lastMouseMoveTimeMsec = timeGetTime();
 
 			const Real spin = msg->getArgument( 1 )->real;
+
+			// Hypersonic @feature (D-258): Ctrl + wheel steps the zoom-out limit, one step per whole notch (a
+			// touchpad pinch arrives as Ctrl + fractional wheel), wheel up = closer (lower limit)
+			if (msg->getArgument( 2 )->integer & KEY_STATE_CONTROL)
+			{
+				if (!canChangeZoomOut())
+					break;
+				if ((spin > 0.0f) != (m_zoomOutWheelSpin > 0.0f))
+					m_zoomOutWheelSpin = 0.0f;	// direction changed: start counting again
+				m_zoomOutWheelSpin += spin;
+				const Int steps = (Int)m_zoomOutWheelSpin;
+				if (steps != 0)
+				{
+					m_zoomOutWheelSpin -= (Real)steps;
+					changeZoomOut(OptionPreferences::stepCameraZoomOut(TheGlobalData->m_maxCameraHeight, -steps));
+				}
+				break;
+			}
+
 			const Real zoom = -spin * View::ZoomHeightPerSecond;
 			TheTacticalView->userZoom(zoom);
 
@@ -437,6 +499,10 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 		//-----------------------------------------------------------------------------
 		case GameMessage::MSG_FRAME_TICK:
 		{
+			// Hypersonic @feature (D-258): 0.6 s after the last Ctrl + wheel change, save it and say it once
+			if (m_zoomOutChangePending && timeGetTime() - m_zoomOutChangeTimeMsec >= 600)
+				flushZoomOutChange();
+
 			Coord2D offset = {0, 0};
 
 			if (m_isScrolling && !TheInGameUI->isScrolling())

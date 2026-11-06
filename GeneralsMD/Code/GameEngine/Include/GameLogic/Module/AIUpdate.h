@@ -39,6 +39,7 @@ class AIStateMachine;
 class AttackPriorityInfo;
 class DamageInfo;
 class DozerAIInterface;
+class MissileAIUpdate;
 class Object;
 class Path;
 class PathfindServicesInterface;
@@ -320,6 +321,7 @@ public:
 	virtual const AssaultTransportAIInterface* getAssaultTransportAIInterface() const { return nullptr; }
 	virtual JetAIUpdate* getJetAIUpdate() { return nullptr; }
 	virtual const JetAIUpdate* getJetAIUpdate() const { return nullptr; }
+	virtual const MissileAIUpdate* getMissileAIUpdate() const { return nullptr; }	///< Hypersonic @feature ballistic arc (D-042)
 
 #ifdef ALLOW_SURRENDER
 	void setSurrendered( const Object *objWeSurrenderedTo, Bool surrendered );

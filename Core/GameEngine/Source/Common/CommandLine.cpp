@@ -758,6 +758,39 @@ Int parseLoadReplay(char *args[], int num)
 	return 1;
 }
 
+#if RTS_ZEROHOUR
+// Hypersonic @feature (Generals Hypersonic D-049) -hypersonicScenario <scenario file> <output folder>: dev test
+// harness. Starts the scenario's skirmish directly (no intro, shell map or menus, muted) and quits when it is done.
+Int parseHypersonicScenario(char *args[], int num)
+{
+	if (num > 2)
+	{
+		TheWritableGlobalData->m_hypersonicScenario = args[1];
+		TheWritableGlobalData->m_hypersonicScenarioOutput = args[2];
+		TheWritableGlobalData->m_shellMapOn = FALSE;
+		TheWritableGlobalData->m_playIntro = FALSE;
+		TheWritableGlobalData->m_playSizzle = FALSE;
+		TheWritableGlobalData->m_animateWindows = FALSE;
+		TheWritableGlobalData->m_audioOn = false;
+		TheWritableGlobalData->m_speechOn = false;
+		TheWritableGlobalData->m_soundsOn = false;
+		TheWritableGlobalData->m_musicOn = false;
+		return 3;
+	}
+	return 1;
+}
+
+// Hypersonic @feature (D-132) -hypersonicScenarioAudio: hear a scenario (sound effects and speech, no music).
+// Must follow -hypersonicScenario, which mutes everything.
+Int parseHypersonicScenarioAudio(char *args[], int)
+{
+	TheWritableGlobalData->m_audioOn = true;
+	TheWritableGlobalData->m_speechOn = true;
+	TheWritableGlobalData->m_soundsOn = true;
+	return 1;
+}
+#endif
+
 //=============================================================================
 //=============================================================================
 
@@ -1203,6 +1236,11 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-mod", parseMod },
 	{ "-noshaders", parseNoShaders },
 	{ "-quickstart", parseQuickStart },
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-049) Run a dev test scenario: -hypersonicScenario <scenario file> <output folder>
+	{ "-hypersonicScenario", parseHypersonicScenario },
+	{ "-hypersonicScenarioAudio", parseHypersonicScenarioAudio },
+#endif
 	{ "-useWaveEditor", parseUseWaveEditor },
 
 	// TheSuperHackers @feature bobtista 22/07/2026 Load a save game file from the command line.
@@ -1436,9 +1474,12 @@ void CommandLine::parseCommandLineForStartup()
 	parseCommandLine(paramsForStartup, ARRAY_SIZE(paramsForStartup),
 		TheWritableGlobalData->m_commandLineData.m_parsedArguments);
 
-	if (!rts::WorkingDirectory::hasSetWorkingDirectory())
+	// Hypersonic @feature (D-134) an exe outside the game folder runs in the game folder (separate mod folder)
+	if (!rts::WorkingDirectory::hasSetWorkingDirectory() && !rts::WorkingDirectory::setGameDataWorkingDirectory())
 		rts::WorkingDirectory::setExecutableWorkingDirectory();
 }
+
+static void findDefaultMod(); // Hypersonic @bugfix (D-145)
 
 void CommandLine::parseCommandLineForEngineInit()
 {
@@ -1452,4 +1493,40 @@ void CommandLine::parseCommandLineForEngineInit()
 
 	parseCommandLine(paramsForEngineInit, ARRAY_SIZE(paramsForEngineInit),
 		TheWritableGlobalData->m_commandLineData.m_parsedArguments);
+
+	findDefaultMod();
+}
+
+// Hypersonic @bugfix (D-145) see CommandLine.h. The arguments it consumes are marked parsed, so the engine-init
+// pass does not parse -mod a second time; nothing GameData.ini sets is touched here.
+void CommandLine::parseCommandLineForMod()
+{
+	createGlobalData();
+
+	static CommandLineParam paramsForMod[] =
+	{
+		{ "-mod", parseMod },
+	};
+	parseCommandLine(paramsForMod, ARRAY_SIZE(paramsForMod),
+		TheWritableGlobalData->m_commandLineData.m_parsedArguments);
+
+	findDefaultMod();
+}
+
+static void findDefaultMod()
+{
+#if RTS_ZEROHOUR
+	// Hypersonic @feature (D-134) without -mod, a Hypersonic.big next to the exe is the mod (plain double-click)
+	if (TheGlobalData->m_modBIG.isEmpty() && TheGlobalData->m_modDir.isEmpty())
+	{
+		Char modPath[_MAX_PATH];
+		if (rts::WorkingDirectory::getExecutableDirectory(modPath, ARRAY_SIZE(modPath))
+			&& strlen(modPath) + strlen("Hypersonic.big") < ARRAY_SIZE(modPath))
+		{
+			strcat(modPath, "Hypersonic.big");
+			if (TheLocalFileSystem->doesFileExist(modPath))
+				TheWritableGlobalData->m_modBIG = modPath;
+		}
+	}
+#endif
 }

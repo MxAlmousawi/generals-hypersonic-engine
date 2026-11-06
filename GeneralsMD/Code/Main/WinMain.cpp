@@ -63,6 +63,8 @@
 #include "Win32Device/GameClient/Win32Mouse.h"
 #include "Win32Device/Common/Win32GameEngine.h"
 #include "Common/version.h"
+#include "Common/WorkingDirectory.h"
+#include "Common/HangWatch.h"
 #include "BuildVersion.h"
 #include "GeneratedVersion.h"
 #include "resource.h"
@@ -350,6 +352,11 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT message,
 				}
 				break;
 			//-------------------------------------------------------------------------
+			// Hypersonic @feature (D-274) dragging the window stops the main loop on purpose, it is not a hang
+			case WM_ENTERSIZEMOVE:
+				HangWatch::beginLongWork();
+				break;
+			//-------------------------------------------------------------------------
 			case WM_SYSCOMMAND:
 				// Prevent moving/sizing and power loss in fullscreen mode
 				switch( wParam & 0xFFF0 )
@@ -474,6 +481,8 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT message,
 
 					if (TheGameEngine)
 						TheGameEngine->setIsActive(isWinMainActive);
+
+					HangWatch::logEvent(isWinMainActive ? "FOCUS gained" : "FOCUS lost"); // Hypersonic @feature (D-274)
 
 					if (isWinMainActive)
 					{
@@ -864,6 +873,23 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		// in release, the file only ever lives in the root dir
 		gLoadScreenBitmap = (HBITMAP)LoadImage(hInstance, "Install_Final.bmp", IMAGE_BITMAP, 0, 0, LR_SHARED|LR_LOADFROMFILE);
 #endif
+		// Hypersonic @feature (D-134) the mod's green splash sits next to HypersonicZH.exe (separate mod folder) and
+		// wins over the retail one in the game folder, which the mod leaves untouched.
+		{
+			char splashPath[_MAX_PATH];
+			if (rts::WorkingDirectory::getExecutableDirectory(splashPath, ARRAY_SIZE(splashPath))
+				&& strlen(splashPath) + strlen("Install_Final.bmp") < ARRAY_SIZE(splashPath))
+			{
+				strcat(splashPath, "Install_Final.bmp");
+				HBITMAP modSplash = (HBITMAP)LoadImage(hInstance, splashPath, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+				if (modSplash != nullptr)
+				{
+					if (gLoadScreenBitmap != nullptr && gLoadScreenBitmap != modSplash)
+						::DeleteObject(gLoadScreenBitmap);
+					gLoadScreenBitmap = modSplash;
+				}
+			}
+		}
 
 #ifdef RTS_ENABLE_CRASHDUMP
 		// Initialize minidump facilities - requires TheGlobalData so performed after parseCommandLineForStartup
@@ -917,8 +943,15 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 		DEBUG_LOG(("CRC message is %d", GameMessage::MSG_LOGIC_CRC));
 
+		// Hypersonic @feature (D-274) Hang watchdog and diagnostics log. After the single-instance check, so a second copy
+		// that is about to quit leaves no trace in the log. Not for the headless replay workers.
+		if (!TheGlobalData->m_headless)
+			HangWatch::init(TheGlobalData->getPath_UserData().str());
+
 		// run the game main loop
 		exitcode = GameMain();
+
+		HangWatch::shutdown("clean"); // Hypersonic @feature (D-274)
 
 		delete TheVersion;
 		TheVersion = nullptr;

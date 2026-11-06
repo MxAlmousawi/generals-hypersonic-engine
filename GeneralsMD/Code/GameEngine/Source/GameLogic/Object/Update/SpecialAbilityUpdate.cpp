@@ -29,6 +29,7 @@
 
 #include "PreRTS.h" // This must go first in EVERY cpp file in the GameEngine
 
+#include "Common/ActionManager.h"
 #include "Common/GameAudio.h"
 #include "Common/GlobalData.h"
 #include "Common/Player.h"
@@ -56,6 +57,7 @@
 #include "GameLogic/ExperienceTracker.h"
 
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/JetAIUpdate.h"
 #include "GameLogic/Module/LaserUpdate.h"
 #include "GameLogic/Module/PhysicsUpdate.h"
 #include "GameLogic/Module/SpecialAbilityUpdate.h"
@@ -71,6 +73,10 @@ SpecialAbilityUpdate::SpecialAbilityUpdate( Thing *thing, const ModuleData* modu
 {
   m_captureFlashPhase = 0.0f;
   m_active = false;
+  m_salvoLeft = 0;
+  m_salvoNextFrame = 0;
+  m_salvoTargetID = INVALID_ID;
+  m_salvoTargetPos.zero();
   m_prepFrames = 0;
   m_animFrames = 0;
   m_targetID = INVALID_ID;
@@ -204,9 +210,12 @@ UpdateSleepTime SpecialAbilityUpdate::update()
   //This also means some things might be left around like timed charges to detonate.
   if( getObject()->isEffectivelyDead() )
   {
+    m_salvoLeft = 0;
     onExit( TRUE );
     return calcSleepTime();
   }
+
+  updateAlmasSalvo(); // Hypersonic D-253: later missiles of an Almas salvo, even after the ability itself ended
 
   if( !m_active ) // Not active.
     return calcSleepTime();
@@ -950,6 +959,14 @@ Bool SpecialAbilityUpdate::isWithinAbilityAbortRange() const
 Bool SpecialAbilityUpdate::approachTarget()
 {
   Object *self = getObject();
+  JetAIUpdate* jet = self->getAI() ? self->getAI()->getJetAIUpdate() : nullptr;
+  if (jet && jet->isGazaGuarding() &&
+      getSpecialAbilityUpdateModuleData()->m_specialPowerTemplate->getSpecialPowerType() == SPECIAL_IRAN_ALMAS_STRIKE)
+  {
+    Object* target = TheGameLogic->findObjectByID(m_targetID);
+    jet->approachGazaGuardStrike(target ? *target->getPosition() : m_targetPos);
+    return true;
+  }
   if( m_targetID != INVALID_ID )
   {
     Object *target = TheGameLogic->findObjectByID( m_targetID );
@@ -1078,7 +1095,8 @@ void SpecialAbilityUpdate::startPreparation()
 
   //Trigger the reset timer on the special power because we're officially starting it now!
   SpecialPowerModuleInterface *spmInterface = getMySPM();
-  if( spmInterface )
+  // Hypersonic @feature (D-246): Almas consumes its power only after a validated missile launch.
+  if( spmInterface && spTemplate->getSpecialPowerType() != SPECIAL_IRAN_ALMAS_STRIKE )
   {
     spmInterface->markSpecialPowerTriggered(nullptr);// Null for not creating a view object
   }
@@ -1254,6 +1272,58 @@ Bool SpecialAbilityUpdate::continuePreparation()
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-253): one guided Almas without changing the normal weapon selection, resetting the Sadid
+// clip, or leaving an attack order running. Returns true only when a projectile was created (fireWeapon's own
+// Bool means clip reload, not launch success).
+Bool SpecialAbilityUpdate::fireAlmasMissile(ObjectID targetID, const Coord3D& pos)
+{
+  Object *object = getObject();
+  const SpecialPowerTemplate *spTemplate = getSpecialAbilityUpdateModuleData()->m_specialPowerTemplate;
+  Weapon *weapon = object->getWeaponInWeaponSlot(SECONDARY_WEAPON);
+  Object *target = TheGameLogic->findObjectByID(targetID);
+  Bool valid = targetID != INVALID_ID
+    ? target && TheActionManager->canDoSpecialPowerAtObject(object, target, CMD_FROM_AI, spTemplate, 0, TRUE)
+    : TheActionManager->canDoSpecialPowerAtLocation(object, &pos, CMD_FROM_AI, spTemplate, nullptr, 0, TRUE);
+  if (!weapon || !valid)
+    return false;
+  ObjectID projectileID = INVALID_ID;
+  if (target)
+    weapon->fireWeapon(object, target, &projectileID);
+  else
+    weapon->fireWeapon(object, &pos, &projectileID);
+  // D-254: the special power's cooldown clock (button) starts when the LAST missile of the salvo has left, not at the
+  // first one: its readiness check would refuse the second missile (see markAlmasSalvoDone).
+  return projectileID != INVALID_ID;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-254): starts the ability's cooldown clock (same 45 s as the Almas clip reload).
+void SpecialAbilityUpdate::markAlmasSalvoDone()
+{
+  if (SpecialPowerModuleInterface *spm = getMySPM())
+    spm->markSpecialPowerTriggered(nullptr);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-253): the missiles of an Almas salvo after the first, SalvoDelay apart. A target that is no
+// longer valid (dead, out of sight) ends the salvo; the remaining missiles stay in the clip.
+void SpecialAbilityUpdate::updateAlmasSalvo()
+{
+  if (m_salvoLeft <= 0 || TheGameLogic->getFrame() < m_salvoNextFrame)
+    return;
+  if (!fireAlmasMissile(m_salvoTargetID, m_salvoTargetPos))
+  {
+    m_salvoLeft = 0;
+    markAlmasSalvoDone();
+    return;
+  }
+  --m_salvoLeft;
+  if (m_salvoLeft <= 0)
+    markAlmasSalvoDone();
+  m_salvoNextFrame = TheGameLogic->getFrame() + getSpecialAbilityUpdateModuleData()->m_salvoDelayFrames;
+}
+
+//-------------------------------------------------------------------------------------------------
 void SpecialAbilityUpdate::triggerAbilityEffect()
 {
   const SpecialAbilityUpdateModuleData* data = getSpecialAbilityUpdateModuleData();
@@ -1290,6 +1360,26 @@ void SpecialAbilityUpdate::triggerAbilityEffect()
 
   switch( spTemplate->getSpecialPowerType() )
   {
+    // Hypersonic @feature (D-246): fire one guided missile without changing the normal
+    // weapon selection, resetting the Sadid clip, or leaving an attack order running.
+    case SPECIAL_IRAN_ALMAS_STRIKE:
+    {
+      if (fireAlmasMissile(m_targetID, m_targetPos))
+      {
+        const Int shots = getSpecialAbilityUpdateModuleData()->m_salvoShots;
+        if (shots > 1)
+        {
+          m_salvoLeft = shots - 1;
+          m_salvoNextFrame = TheGameLogic->getFrame() + getSpecialAbilityUpdateModuleData()->m_salvoDelayFrames;
+          m_salvoTargetID = m_targetID;
+          m_salvoTargetPos = m_targetPos;
+          setWakeFrame(getObject(), UPDATE_SLEEP_NONE);
+        }
+        else
+          markAlmasSalvoDone();
+      }
+      break;
+    }
     case SPECIAL_MISSILE_DEFENDER_LASER_GUIDED_MISSILES:
     {
       Object *target = TheGameLogic->findObjectByID( m_targetID );
@@ -2012,13 +2102,14 @@ void SpecialAbilityUpdate::crc( Xfer *xfer )
 // ------------------------------------------------------------------------------------------------
 /** Xfer method
 	* Version Info:
-	* 1: Initial version */
+	* 1: Initial version
+	* 2: Hypersonic D-253 Almas salvo state */
 // ------------------------------------------------------------------------------------------------
 void SpecialAbilityUpdate::xfer( Xfer *xfer )
 {
 
 	// version
-	XferVersion currentVersion = 1;
+	XferVersion currentVersion = 2;
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -2069,6 +2160,15 @@ void SpecialAbilityUpdate::xfer( Xfer *xfer )
 
   // capture flash phase
   xfer->xferReal( &m_captureFlashPhase );
+
+  // Hypersonic D-253: pending Almas salvo
+  if( version >= 2 )
+  {
+    xfer->xferInt( &m_salvoLeft );
+    xfer->xferUnsignedInt( &m_salvoNextFrame );
+    xfer->xferObjectID( &m_salvoTargetID );
+    xfer->xferCoord3D( &m_salvoTargetPos );
+  }
 
 }
 

@@ -36,8 +36,11 @@
 #include "GameLogic/AI.h"
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/Module/AutoDepositUpdate.h"	// Hypersonic @bugfix (D-141)
+#include "GameLogic/Module/BodyModule.h"	// Hypersonic @bugfix (D-141)
 #include "GameLogic/Module/CreateModule.h"
 #include "GameLogic/Object.h"
+#include "GameLogic/SidesList.h"
 #include "GameClient/InGameUI.h"
 
 // ------------------------------------------------------------------------------------------------
@@ -49,6 +52,8 @@ void ReplaceObjectUpgradeModuleData::buildFieldParse(MultiIniFieldParse& p)
 	static const FieldParse dataFieldParse[] =
 	{
 		{ "ReplaceObject",	INI::parseAsciiString,	nullptr, offsetof( ReplaceObjectUpgradeModuleData, m_replaceObjectName ) },
+		// Hypersonic @feature (D-141) opt-in, default No = stock behaviour (stock factions unchanged, IRAN_DESIGN 13)
+		{ "KeepHealthAndProgress",	INI::parseBool,	nullptr, offsetof( ReplaceObjectUpgradeModuleData, m_keepHealthAndProgress ) },
 		{ nullptr, nullptr, nullptr, 0 }
 	};
   p.add(dataFieldParse);
@@ -75,6 +80,11 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 
 	Bool oldObjectSelected;
 	Int oldObjectSquadNumber;
+	ObjectID oldObjectID;	// Hypersonic @bugfix (D-100)
+	Real oldHealthFraction = 1.0f;	// Hypersonic @bugfix (D-141)
+	const AutoDepositUpdate* oldAutoDeposit = nullptr;	// Hypersonic @bugfix (D-141)
+	static const NameKeyType key_AutoDepositUpdate = NAMEKEY("AutoDepositUpdate");	// Hypersonic @bugfix (D-141)
+	Player* oldOwner;
 	Matrix3D myMatrix;
 	Team* myTeam;
 
@@ -83,6 +93,15 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 
 		myMatrix = *me->getTransformMatrix();
 		myTeam = me->getTeam();// Team implies player.  It is a subset.
+		oldObjectID = me->getID();
+		oldOwner = me->getControllingPlayer();
+
+		// Hypersonic @bugfix (Generals Hypersonic D-141) remember the old object's damage and income timer (destroyObject
+		// only queues the deletion, so the old modules stay valid until the end of this function).
+		const BodyModuleInterface* oldBody = me->getBodyModule();
+		if( oldBody && oldBody->getMaxHealth() > 0.0f )
+			oldHealthFraction = oldBody->getHealth() / oldBody->getMaxHealth();
+		oldAutoDeposit = (const AutoDepositUpdate*)me->findUpdateModule(key_AutoDepositUpdate);
 
 		if (replacementTemplate == nullptr)
 		{
@@ -104,6 +123,33 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 	replacementObject->setTransformMatrix(&myMatrix);
 	TheAI->pathfinder()->addObjectToPathfindMap( replacementObject );
 
+	// Hypersonic @bugfix (Generals Hypersonic D-141) an upgrade is not a repair: the replacement keeps the old object's
+	// health fraction (Export Contract no longer fully repairs a damaged Abadan Refinery) ...
+	// Only with KeepHealthAndProgress = Yes (Iran's Export Contract); stock modules keep the stock behaviour.
+	if( data->m_keepHealthAndProgress )
+	{
+		BodyModuleInterface* newBody = replacementObject->getBodyModule();
+		if( newBody && oldHealthFraction > 0.0f && oldHealthFraction < 1.0f )
+			newBody->internalChangeHealth( oldHealthFraction * newBody->getMaxHealth() - newBody->getHealth() );
+
+		// ... and its progress toward the next income deposit (the 20 s refinery timer does not restart).
+		AutoDepositUpdate* newAutoDeposit = (AutoDepositUpdate*)replacementObject->findUpdateModule(key_AutoDepositUpdate);
+		if( newAutoDeposit && oldAutoDeposit )
+			newAutoDeposit->inheritDepositProgress( oldAutoDeposit );
+	}
+
+	// Hypersonic @bugfix (Generals Hypersonic D-100) an AI build list entry that tracked the old object now tracks its
+	// replacement. Otherwise the AI sees the old object as destroyed and rebuilds it next to the replacement: every
+	// Export Contract on an AI Abadan Refinery added another refinery.
+	if( oldOwner )
+	{
+		for( BuildListInfo *info = oldOwner->getBuildList(); info; info = info->getNext() )
+		{
+			if( info->getObjectID() == oldObjectID )
+				info->setObjectID( replacementObject->getID() );
+		}
+	}
+
 	// Now onCreates were called at the constructor.  This magically created
 	// thing needs to be considered as Built for Game specific stuff.
 	for (BehaviorModule** m = replacementObject->getBehaviorModules(); *m; ++m)
@@ -116,7 +162,14 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 
 	if( replacementObject->getControllingPlayer() )
 	{
-		replacementObject->getControllingPlayer()->onStructureConstructionComplete(nullptr, replacementObject, FALSE);
+		// Hypersonic @bugfix (Generals Hypersonic D-141) the replacement was created finished, so joining its team
+		// (Object constructor -> setTeam -> Player::becomingTeamMember) already counted its power;
+		// onStructureConstructionComplete counts it again. Take it out once so it is counted once (Export Contract: the
+		// Abadan Refinery used 4 power, then 8, and selling it gave back only 4). Generic: stock replacements use no power.
+		// With KeepHealthAndProgress, isRebuild = TRUE: the score screen does not count the replacement as another
+		// building built and its full cost spent.
+		replacementObject->friend_adjustPowerForPlayer(FALSE);
+		replacementObject->getControllingPlayer()->onStructureConstructionComplete(nullptr, replacementObject, data->m_keepHealthAndProgress);
 
 		// TheSuperHackers @bugfix Stubbjax 26/05/2025 If the old object was selected, select the new one.
 		if (oldObjectSelected)

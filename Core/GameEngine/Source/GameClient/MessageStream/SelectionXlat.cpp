@@ -40,6 +40,9 @@
 #include "GameLogic/Damage.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
+#if RTS_ZEROHOUR
+#include "GameLogic/Module/JetAIUpdate.h"
+#endif
 #include "GameLogic/Squad.h"
 #include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Module/ContainModule.h"
@@ -122,6 +125,11 @@ Bool CanSelectDrawable( const Drawable *draw, Bool dragSelecting )
 		return FALSE;  // can't select
 	}
 	const Object *obj = draw->getObject();
+#if RTS_ZEROHOUR
+	const JetAIUpdate* jet = obj->getAI() ? obj->getAI()->getJetAIUpdate() : nullptr;
+	if (dragSelecting && jet && jet->isGazaGuarding())
+		return FALSE; // Hypersonic D-246: direct click still works
+#endif
 
 	if( obj->isEffectivelyDead() && !obj->isKindOf(KINDOF_ALWAYS_SELECTABLE))
 	{

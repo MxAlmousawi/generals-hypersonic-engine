@@ -89,6 +89,9 @@
 #include "GameClient/DisplayStringManager.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Module/OverchargeBehavior.h"
+#if RTS_ZEROHOUR
+#include "GameLogic/Module/MunitionMagazineUpdate.h"
+#endif
 #include "GameLogic/Module/ProductionUpdate.h"
 #include "GameLogic/ScriptEngine.h"
 
@@ -338,6 +341,34 @@ void ControlBar::populateBuildTooltipLayout( const CommandButton *commandButton,
 				else if( thingTemplate )
 				{
 					CanMakeType makeType = TheBuildAssistant->canMakeUnit( selectedObject, commandButton->getThingTemplate() );
+
+#if RTS_ZEROHOUR
+					// Hypersonic @feature Launch facilities (D-039, D-042): the selected facility's magazine (storage units) and
+					// how many of this type are on its launchers that take it.
+					MunitionMagazineInterface *magazine = nullptr;
+					for( BehaviorModule **bmi = selectedObject->getBehaviorModules(); *bmi && !magazine; ++bmi )
+					{
+						MunitionMagazineInterface *candidate = (*bmi)->getMunitionMagazineInterface();
+						if( candidate && candidate->storesMunition( thingTemplate ) )
+							magazine = candidate;
+					}
+					if( magazine )
+					{
+						UnicodeString status;
+						status.format( TheGameText->fetch( "TOOLTIP:MunitionMagazineStatus" ).str(),
+							magazine->getStoredSize(), magazine->getCapacity(),
+							magazine->getLoadedCount( thingTemplate, FALSE ), magazine->getLauncherCount( thingTemplate ) );
+						descrip.concat( L"\n\n" );
+						descrip.concat( status );
+						if( makeType == CANMAKE_PARKING_PLACES_FULL )
+						{
+							descrip.concat( L"\n" );
+							descrip.concat( TheGameText->fetch( "TOOLTIP:MunitionMagazineFull" ) );
+							makeType = CANMAKE_OK;	// not the parking message
+						}
+					}
+#endif
+
 					switch( makeType )
 					{
 						case CANMAKE_NO_MONEY:

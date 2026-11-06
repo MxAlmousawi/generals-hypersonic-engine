@@ -209,6 +209,9 @@ public:
 	virtual void setHeightAboveGround(Real z);
 	virtual void zoom( Real height ); ///< Zoom in/out, closer to the ground, limit to min, or farther away from the ground, limit to max
 	virtual void setZoomToDefault() { m_zoom  = 1.0f; } ///< Set zoom to default value
+	// Hypersonic @feature camera zoom-out option (Generals Hypersonic D-223): GlobalData MaxCameraHeight changed from
+	// oldMax to newMax (client only): scale the zoom-out limit, clamp a camera above a lowered limit
+	virtual void applyMaxCameraHeightChange( Real oldMax, Real newMax );
 	virtual void setOkToAdjustHeight( Bool val ) { m_okToAdjustHeight = val; }	///< Set this to adjust camera height
 
 	// TheSuperHackers @info Functions to call for user camera controls, not by the scripted camera.
@@ -238,6 +241,8 @@ public:
 	virtual Real getTerrainHeightAtPivot() { return m_terrainHeightAtPivot; }
 	virtual Real getCurrentHeightAboveGround() { return m_currentHeightAboveGround; }
 
+	/// Hypersonic @feature scenario free camera (D-272): eye and target in world space, fovDegrees 0 = keep; eye null = off.
+	virtual void setFreeCamera( const Coord3D *eye, const Coord3D *target, Real fovDegrees ) {}
 	virtual void setFieldOfView( Real angle ) { m_FOV = angle; }				///< Set the horizontal field of view angle
 	virtual Real getFieldOfView() { return m_FOV; }								///< Get the horizontal field of view angle
 
@@ -270,7 +275,7 @@ public:
 	virtual Bool isMouseLocked() { return m_mouseLocked; }														///< is the mouse input locked to the tactical view?
 
 	/// Add an impulse force to shake the camera
-	virtual void shake( const Coord3D *epicenter, CameraShakeType shakeType ) { };
+	virtual void shake( const Coord3D *epicenter, CameraShakeType shakeType, Real intensityScale = 1.0f ) { };	///< Hypersonic (D-060) intensityScale
 
 	virtual Real getFXPitch() const { return 1.0f; }					///< returns the FX pitch angle
 	virtual void forceCameraAreaConstraintRecalc() {}

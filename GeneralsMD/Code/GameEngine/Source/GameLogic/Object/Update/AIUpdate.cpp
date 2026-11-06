@@ -56,12 +56,14 @@
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/Locomotor.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/JetAIUpdate.h"
 #include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Module/ContainModule.h"
 #include "GameLogic/Module/PhysicsUpdate.h"
 #include "GameLogic/Module/ProneUpdate.h"
 #include "GameLogic/Module/DeliverPayloadAIUpdate.h"
 #include "GameLogic/Module/HackInternetAIUpdate.h"
+#include "GameLogic/Module/HitChanceBehavior.h"
 #include "GameLogic/Module/HordeUpdate.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/PartitionManager.h"
@@ -4523,8 +4525,93 @@ Bool AIUpdateInterface::canAutoAcquireWhileStealthed() const
 /**
  * Return the next object that our mood suggests we should attack.
  */
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature SAM early launch (Generals Hypersonic D-038). Accepts enemy Iranian missiles (SAMHitIsLethal
+// targets) that one of the SAM lead-intercept weapons of m_obj can intercept inside its attack range.
+//-------------------------------------------------------------------------------------------------
+class PartitionFilterLeadInterceptTarget : public PartitionFilter
+{
+private:
+	const Object *m_obj;
+public:
+	PartitionFilterLeadInterceptTarget( const Object *obj ) : m_obj( obj ) { }
+
+	virtual Bool allow( Object *objOther ) override
+	{
+		if( objOther->isEffectivelyDead() )
+			return false;
+		if( !objOther->isKindOf( KINDOF_PROJECTILE ) && !objOther->isAirborneTarget() )
+			return false;
+		if( objOther->isOffMap() != m_obj->isOffMap() )
+			return false;
+		if( m_obj->getRelationship( objOther ) != ENEMIES )
+			return false;
+		if( !WeaponTemplate::isLeadInterceptTarget( objOther ) )
+			return false;
+
+		for( Int i = 0; i < WEAPONSLOT_COUNT; ++i )
+		{
+			const Weapon *weapon = m_obj->getWeaponInWeaponSlot( (WeaponSlotType)i );
+			if( weapon != nullptr && weapon->getTemplate()->isLeadInterceptWeapon() && weapon->isWithinAttackRange( m_obj, objOther ) )
+				return true;
+		}
+		return false;
+	}
+
+#if defined(RTS_DEBUG)
+	virtual const char* debugGetName() override { return "PartitionFilterLeadInterceptTarget"; }
+#endif
+};
+
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature SAM early launch (D-038): the nearest enemy Iranian missile that obj's SAM weapons can intercept.
+// The search works like radar: beyond vision range and through fog, as far out as the fastest missile could be while
+// its intercept point is still within the weapon's range. Objects without such weapons return at once.
+//-------------------------------------------------------------------------------------------------
+static Object* findLeadInterceptTarget( const Object *obj, const AttackPriorityInfo *info )
+{
+	// No Iranian missile exists anywhere (always so in stock-only games): nothing to look for.
+	if( !HitChanceBehavior::isAnySAMHitLethalObjectAlive() )
+		return nullptr;
+
+	Real searchRange = 0.0f;
+	for( Int i = 0; i < WEAPONSLOT_COUNT; ++i )
+	{
+		const Weapon *weapon = obj->getWeaponInWeaponSlot( (WeaponSlotType)i );
+		if( weapon != nullptr && weapon->getTemplate()->isLeadInterceptWeapon() )
+		{
+			Real range = weapon->getTemplate()->getLeadInterceptSearchRange( weapon->getAttackRange( obj ) );
+			if( range > searchRange )
+				searchRange = range;
+		}
+	}
+	if( searchRange <= 0.0f || !obj->isAbleToAttack() )
+		return nullptr;
+
+	PartitionFilterLeadInterceptTarget filterLead( obj );
+	PartitionFilterPossibleToAttack filterAttack( ATTACK_NEW_TARGET, obj, CMD_FROM_AI );
+	PartitionFilterStealthedAndUndetected filterStealth( obj, false );
+	PartitionFilter *filters[] = { &filterLead, &filterAttack, &filterStealth, nullptr };
+
+	ObjectIterator *iter = ThePartitionManager->iterateObjectsInRange( obj, searchRange, FROM_BOUNDINGSPHERE_2D, filters, ITER_SORTED_NEAR_TO_FAR );
+	MemoryPoolObjectHolder holder( iter );
+	for( Object *victim = iter->first(); victim != nullptr; victim = iter->next() )
+	{
+		// scripted attack priorities: never pick a target they rule out
+		if( info != nullptr && info != TheScriptEngine->getDefaultAttackInfo() && info->getPriority( victim->getTemplate() ) == 0 )
+			continue;
+		return victim;
+	}
+	return nullptr;
+}
+
+//-------------------------------------------------------------------------------------------------
 Object* AIUpdateInterface::getNextMoodTarget( Bool calledByAI, Bool calledDuringIdle )
 {
+	// Hypersonic D-246: guarding Gaza uses only its deterministic ground/spot scan.
+	const JetAIUpdate* jet = getJetAIUpdate();
+	if (jet && jet->isGazaGuarding())
+		return nullptr;
 	Object *obj = getObject();
 
 	// if we're dead, we can't attack
@@ -4669,6 +4756,14 @@ Object* AIUpdateInterface::getNextMoodTarget( Bool calledByAI, Bool calledDuring
 		)
 	{
 		flags |= AI::UNFOGGED;
+	}
+
+	// Hypersonic @feature SAM early launch (D-038): an incoming Iranian missile that a SAM weapon can intercept comes
+	// first, found by radar (see findLeadInterceptTarget). Without such weapons or missiles, nothing changes.
+	Object *leadVictim = findLeadInterceptTarget( obj, getAttackInfo() );
+	if( leadVictim != nullptr )
+	{
+		return leadVictim;
 	}
 
 	Object *newVictim = TheAI->findClosestEnemy(obj, rangeToFindWithin, flags, getAttackInfo());

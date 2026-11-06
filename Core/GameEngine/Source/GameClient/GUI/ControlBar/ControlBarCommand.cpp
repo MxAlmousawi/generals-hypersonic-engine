@@ -50,6 +50,16 @@
 #include "GameLogic/Module/SpecialAbilityUpdate.h"
 #include "GameLogic/Module/VeterancyGainCreate.h"
 #include "GameLogic/Module/HackInternetAIUpdate.h"
+#if RTS_ZEROHOUR
+#include "GameLogic/Module/MunitionMagazineUpdate.h"
+#endif
+
+#if RTS_ZEROHOUR
+class GameWindow;
+class CommandButton;
+class Object;
+static void updateMunitionCountText( GameWindow *win, const CommandButton *command, Object *obj );	// Hypersonic @feature (D-039)
+#endif
 #include "GameLogic/Weapon.h"
 
 #include "GameClient/InGameUI.h"
@@ -874,6 +884,11 @@ void ControlBar::updateContextCommand()
 			GadgetButtonDrawOverlayImage( win, image );
 		}
 
+#if RTS_ZEROHOUR
+		// Hypersonic @feature launch facility stock on its buttons (D-039)
+		updateMunitionCountText( win, command, obj );
+#endif
+
 		//
 		// for check-like commands we will keep the push button "pushed" or "unpushed" depending
 		// on the current running status of the command
@@ -903,6 +918,44 @@ void ControlBar::updateContextCommand()
 //	repopulateBuildTooltipLayout();
 
 }
+
+#if RTS_ZEROHOUR
+//-------------------------------------------------------------------------------------------------
+// Hypersonic @feature Launch facilities (D-039): the facility's build buttons show how many of that munition
+// wait in its magazine, its launch buttons how many are ready on its launchers. Every other button keeps the
+// empty text it always has (command buttons never carry text otherwise).
+static void updateMunitionCountText( GameWindow *win, const CommandButton *command, Object *obj )
+{
+	Int count = -1;
+	if( obj && command )
+	{
+		if( command->getCommandType() == GUI_COMMAND_UNIT_BUILD && command->getThingTemplate() )
+		{
+			for( BehaviorModule **m = obj->getBehaviorModules(); *m; ++m )
+			{
+				MunitionMagazineInterface *magazine = (*m)->getMunitionMagazineInterface();
+				if( magazine && magazine->storesMunition( command->getThingTemplate() ) )
+				{
+					count = magazine->getStoredCount( command->getThingTemplate() );
+					break;
+				}
+			}
+		}
+		else if( command->getCommandType() == GUI_COMMAND_SPECIAL_POWER && command->getSpecialPowerTemplate() )
+		{
+			SpecialPowerModuleInterface *mod = obj->getSpecialPowerModule( command->getSpecialPowerTemplate() );
+			if( mod )
+				count = mod->getShortcutReadyCount();
+		}
+	}
+
+	UnicodeString text;
+	if( count > 0 )
+		text.format( L"%d", count );
+	if( win->winGetInstanceData()->getText() != text )
+		GadgetButtonSetText( win, text );
+}
+#endif
 
 //-------------------------------------------------------------------------------------------------
 const Image* ControlBar::calculateVeterancyOverlayForThing( const ThingTemplate *thingTemplate )
@@ -1403,6 +1456,26 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 			// sanity
 			DEBUG_ASSERTCRASH( command->getSpecialPowerTemplate() != nullptr,
 												 ("The special power in the command '%s' is null", command->getName().str()) );
+#if RTS_ZEROHOUR
+			// Hypersonic D-246: ammo and the 30 s power timer are independent requirements.
+			if (command->getSpecialPowerTemplate()->getSpecialPowerType() == SPECIAL_IRAN_ALMAS_STRIKE)
+			{
+				const Weapon* almas = obj->getWeaponInWeaponSlot(SECONDARY_WEAPON);
+				if (!almas)
+					return COMMAND_RESTRICTED;
+				if (almas->getStatus() != READY_TO_FIRE)
+				{
+					// D-254: while the clip refills, show the reload wheel (the weapon's own progress)
+					if (almas->getStatus() == RELOADING_CLIP)
+					{
+						Int percent = almas->getPercentReadyToFire() * 100;
+						GadgetButtonDrawInverseClock( applyToWin, percent, m_buildUpClockColor );
+						return COMMAND_NOT_READY;
+					}
+					return COMMAND_RESTRICTED;
+				}
+			}
+#endif
 			// get special power module from the object to execute it
 			SpecialPowerModuleInterface *mod = obj->getSpecialPowerModule( command->getSpecialPowerTemplate() );
 

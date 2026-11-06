@@ -108,6 +108,31 @@ enum WeaponAntiMaskType CPP_11(: Int)
 };
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature Interceptor class of a weapon (Generals Hypersonic IRAN_DESIGN 7c). What a hit does to a
+// target that has a HitChanceBehavior: a SAM hit destroys it outright when the target says SAMHitIsLethal,
+// a gun hit (the default) deals the weapon's normal damage. D-059: a LASER hit (the stock Point Defense Laser
+// weapons) deals normal damage but rolls the target's LaserHitChance instead of its HitChance.
+enum InterceptorClassType CPP_11(: Int)
+{
+	INTERCEPTOR_GUN,
+	INTERCEPTOR_SAM,
+	INTERCEPTOR_LASER,
+
+	INTERCEPTOR_CLASS_COUNT
+};
+
+#ifdef DEFINE_INTERCEPTORCLASS_NAMES
+static const char *const TheInterceptorClassNames[] =
+{
+	"GUN",
+	"SAM",
+	"LASER",
+	nullptr
+};
+static_assert(ARRAY_SIZE(TheInterceptorClassNames) == INTERCEPTOR_CLASS_COUNT + 1, "Incorrect array size");
+#endif
+
+//-------------------------------------------------------------------------------------------------
 enum WeaponAffectsMaskType CPP_11(: Int)
 {
 	WEAPON_AFFECTS_SELF						= 0x01,
@@ -404,6 +429,8 @@ public:
 	Real getPrimaryDamageRadius(const WeaponBonus& bonus) const;
 	Real getSecondaryDamage(const WeaponBonus& bonus) const;
 	Real getSecondaryDamageRadius(const WeaponBonus& bonus) const;
+	Real getTertiaryDamage(const WeaponBonus& bonus) const;				///< Hypersonic @feature third ring (Generals Hypersonic D-222)
+	Real getTertiaryDamageRadius(const WeaponBonus& bonus) const;	///< Hypersonic @feature third ring (Generals Hypersonic D-222)
 	Int getPreAttackDelay(const WeaponBonus& bonus) const;
 	Bool isContactWeapon() const;
 
@@ -463,6 +490,70 @@ public:
 	Bool isShowsAmmoPips() const { return m_isShowsAmmoPips; }
 	Bool isPlayFXWhenStealthed() const { return m_playFXWhenStealthed; }
 	Bool getDieOnDetonate() const { return m_dieOnDetonate; }
+	InterceptorClassType getInterceptorClass() const { return m_interceptorClass; }
+	Int getMissileHitsToKill() const { return m_missileHitsToKill; }
+	Real getDroneHitChanceScale() const { return m_droneHitChanceScale; }
+	Real getMissileHitChanceScale() const { return m_missileHitChanceScale; }
+
+	// Hypersonic @feature SAM lead interception (Generals Hypersonic D-038). A SAM-class weapon whose projectile is a
+	// target-following MissileAIUpdate missile engages SAMHitIsLethal targets at a predicted intercept point.
+	Bool isLeadInterceptWeapon() const { return m_leadProfile.m_valid; }
+	static Bool isLeadInterceptTarget(const Object* victim);	///< an airborne/projectile target whose HitChanceBehavior says SAMHitIsLethal
+	Bool isLeadInterceptEngagement(const Object* victim) const { return isLeadInterceptWeapon() && isLeadInterceptTarget(victim); }
+	Real getLeadInterceptFuseRadius() const { return m_leadProfile.m_fuseRadius; }
+	UnsignedInt getLeadInterceptMaxFrames() const { return m_leadProfile.m_maxFrames; }
+	/// Where an interceptor at 'from', flying at 'speed' (dist/frame, thrust after 'coastFrames'), can meet 'victim'
+	/// within 'maxFrames' frames. False if no intercept point exists.
+	Bool solveLeadIntercept(const Coord3D* from, Real speed, UnsignedInt coastFrames, UnsignedInt maxFrames,
+		const Object* victim, Coord3D* interceptPoint) const;
+	/// Solve from a launcher that has not fired yet (the interceptor's launch speed and ignition delay).
+	Bool solveLeadInterceptFromLauncher(const Object* launcher, const Object* victim, Coord3D* interceptPoint) const;
+	/// The target's actual velocity in dist/frame (a braking projectile moves straight at its goal, not by its physics).
+	static void getLeadTargetVelocity(const Object* victim, Coord3D* vel);
+
+	// Hypersonic @feature cluster warhead (Generals Hypersonic D-048): ClusterCount > 0 with a ClusterWeapon makes the
+	// weapon's damage a spread of bomblets instead of one blast (see dealDamageInternal).
+	Bool isClusterWeapon() const { return m_clusterCount > 0 && m_clusterWeapon != nullptr; }
+	// Hypersonic @feature one-by-one release (Generals Hypersonic D-162): ClusterReleaseInterval > 0 on a cluster weapon whose
+	// ClusterWeapon has a ProjectileObject: the ballistic missile carrying it does not burst; past its apex it releases the
+	// ClusterCount warheads one at a time (MissileAIUpdate::updateClusterRelease), the last one ClusterReleaseLead before
+	// it lands itself, then detonates on the aim point with ClusterCenterWeapon (the missile is the centre warhead).
+	Bool isClusterReleaseWeapon() const { return isClusterWeapon() && m_clusterReleaseInterval > 0 && m_clusterWeapon->getProjectileTemplate() != nullptr; }
+	UnsignedInt getClusterReleaseInterval() const { return m_clusterReleaseInterval; }
+	UnsignedInt getClusterReleaseLead() const { return m_clusterReleaseLead; }
+	UnsignedInt getClusterReleaseStart() const { return m_clusterReleaseStart; }	///< (D-162) > 0: release early, this long into the arc
+	Real getClusterReleaseCarrierSpeed() const { return m_clusterReleaseCarrierSpeed; }	///< (D-162) carrier's top speed while releasing
+	Real getClusterReleaseFinalSpeed() const { return m_clusterReleaseFinalSpeed; }	///< (D-215) > 0: carrier's top speed after the last release
+	Bool getClusterReleaseCarrierVanishes() const { return m_clusterReleaseCarrierVanishes; }	///< (D-245) the carrier is gone after its last release: no centre warhead
+	const FXList* getClusterReleaseVanishFX() const { return m_clusterReleaseVanishFX; }	///< (D-245) played where the carrier vanished
+	UnsignedInt getClusterReleaseDropTime() const { return m_clusterReleaseDropTime; }	///< (D-261) > 0: each released warhead leaves level and falls this many frames
+	Real getClusterReleaseConeSpeed() const { return m_clusterReleaseConeSpeed; }	///< (D-267) > 0: all warheads leave together and fly a cone at about this mean speed (dist/frame)
+	Real getClusterReleaseConeInherit() const { return m_clusterReleaseConeInherit; }	///< (D-267) how much of the carrier's velocity their start keeps (rest: straight at the spot)
+	Int getClusterCount() const { return m_clusterCount; }
+	Real getClusterRadius() const { return m_clusterRadius; }
+	const WeaponTemplate* getClusterWeapon() const { return m_clusterWeapon; }
+	const WeaponTemplate* getClusterCenterWeapon() const { return m_clusterCenterWeapon; }
+	/// (D-162) launch one ClusterWeapon warhead from 'carrier' to 'point', landing in 'frames' frames, leaving with the
+	/// carrier's vertical speed 'startVZ' (dist/frame); credited to 'launcherID' when it still exists.
+	void releaseClusterWarhead(const Object* carrier, ObjectID launcherID, const Coord3D* point, UnsignedInt frames, Real startVZ, const Coord3D* startVel = nullptr) const;
+
+	// Hypersonic @feature scaled explosions (Generals Hypersonic D-060): with ScaleDetonationFX = Yes, the scale at which
+	// this weapon's detonation plays 'fx' (an FXList with a ReferenceDamage): sqrt(blast damage / ReferenceDamage), where
+	// the blast damage is PrimaryDamage with the shot's bonus (a cluster weapon: ClusterCount x its bomblet's damage).
+	// 1 when the weapon does not opt in or the list has no ReferenceDamage.
+	Real getDetonationFXScale(const FXList* fx, const WeaponBonus& bonus) const;
+	// Hypersonic @feature (Generals Hypersonic D-148) FXScale = <factor>: this weapon's FireFX and detonation FX play at that
+	// size (times the damage scale above), e.g. a cook-off's half-size explosion. Default 1.
+	Real getFXScale() const { return m_fxScale; }
+	/// How far out a launcher with this weapon should look for missiles to intercept (range + reach of the fastest target).
+	Real getLeadInterceptSearchRange(Real attackRange) const;
+
+	// Hypersonic @feature (Generals Hypersonic D-042) The ground point a strike by this weapon at 'pos' lands on, by
+	// the rules fireWeaponTemplate uses for a position shot: a designated target (ZeroScatterMarker) is hit with no
+	// scatter, else a random point in the scatter disc (ScatterRadiusUpgrade, ScatterRadiusUniform). Synced random.
+	void computeStrikeAimPoint(const Object* sourceObj, const Coord3D* pos, Coord3D* aim) const;
+	// Hypersonic @feature (D-110, public for the Iran AI strike targeting) the scatter radius with the source player's upgrades
+	Real getScatterRadiusForSource(const Object* sourceObj) const;
 
 	Bool shouldProjectileCollideWith(
 		const Object* projectileLauncher,
@@ -481,7 +572,18 @@ protected:
 	void trimTriggeredHistoricDamage() const;
 	void processHistoricDamage(const Object* source, const Coord3D* pos) const;
 
+	// Hypersonic @feature strike accuracy: upgraded scatter radius and designated targets
+	const Object* findZeroScatterTarget(const Object* sourceObj, const Object* victimObj, const Coord3D* victimPos) const;
+
 private:
+
+	// Hypersonic @feature a player upgrade that sets the scatter radius (the smallest completed one wins)
+	struct ScatterRadiusUpgrade
+	{
+		AsciiString m_upgradeName;
+		Real m_scatterRadius;
+	};
+	typedef std::vector<ScatterRadiusUpgrade> ScatterRadiusUpgradeVec;
 
 	// NOTE: m_nextTemplate will be cleaned up if it is NON-nullptr.
 	WeaponTemplate *m_nextTemplate;
@@ -489,6 +591,21 @@ private:
 	static void parseWeaponBonusSet( INI* ini, void *instance, void * /*store*/, const void* /*userData*/ );
 	static void parseScatterTarget( INI* ini, void *instance, void * /*store*/, const void* /*userData*/ );
 	static void parseShotDelay( INI* ini, void *instance, void * /*store*/, const void* /*userData*/ );
+	static void parseScatterRadiusUpgrade( INI* ini, void *instance, void * /*store*/, const void* /*userData*/ );
+
+	// Hypersonic @feature flight profile of this weapon's interceptor missile (D-038), derived from the projectile's
+	// MissileAIUpdate and SET_NORMAL locomotor in postProcessLoad. Static data; all speeds in dist/frame.
+	struct LeadInterceptProfile
+	{
+		Bool m_valid;							///< SAM class, projectile follows its target with a MissileAIUpdate
+		Real m_launchSpeed;				///< InitialVelocity (or the weapon speed with UseWeaponSpeed)
+		Real m_maxSpeed;					///< locomotor Speed
+		Real m_speedGain;					///< fraction of the missing speed gained per frame (Acceleration / Speed, THRUST locomotor)
+		UnsignedInt m_ignitionFrames;	///< IgnitionDelay: no thrust before this
+		UnsignedInt m_maxFrames;	///< powered flight time (FuelLifetime), capped
+		Real m_fuseRadius;				///< DistanceToTargetForLock: proximity fuse radius
+	};
+	void computeLeadInterceptProfile();
 
 	static const FieldParse TheWeaponTemplateFieldParseTable[];		///< the parse table for INI definition
 
@@ -501,6 +618,8 @@ private:
 	Real m_primaryDamageRadius;							///< primary damage radius range
 	Real m_secondaryDamage;									///< secondary damage amount
 	Real m_secondaryDamageRadius;						///< secondary damage radius range
+	Real m_tertiaryDamage;									///< Hypersonic @feature (D-222) outer ring damage, beyond the secondary radius (0 = off)
+	Real m_tertiaryDamageRadius;						///< Hypersonic @feature (D-222) outer ring radius (0 = off)
 	Real m_shockWaveAmount;									///( How much shockwave generated
 	Real m_shockWaveRadius;									///( How far shockwave effect affects objects
 	Real m_shockWaveTaperOff;								///( How much shockwave is left at the tip of the shockwave radius
@@ -562,6 +681,39 @@ private:
 	ObjectStatusTypes m_damageStatusType;		///< If our damage is Status damage, the status we apply
 	UnsignedInt m_suspendFXDelay;						///< The fx can be suspended for any delay, in frames, then they will execute as normal
 	Bool m_dieOnDetonate;
+
+	// Hypersonic @feature Generals Hypersonic combat rules (IRAN_DESIGN 7b, 7c, 10b); defaults keep stock behaviour.
+	InterceptorClassType m_interceptorClass;					///< what a hit does to a HitChanceBehavior target (GUN: normal damage, SAM: can be lethal)
+	Int m_missileHitsToKill;													///< Hypersonic (D-195) > 0: this many hits destroy a SAMHitIsLethal target (an Iran missile)
+	Real m_droneHitChanceScale;												///< Hypersonic (D-195) factor on the hit chance of a HitChanceBehavior target that is not a missile (an Iran drone)
+	Real m_missileHitChanceScale;											///< Hypersonic (D-195) factor on the hit chance of a SAMHitIsLethal target (an Iran missile)
+	Bool m_scatterRadiusUniform;											///< scatter points are uniform over the disc (sqrt of the random radius fraction)
+	ScatterRadiusUpgradeVec m_scatterRadiusUpgrades;	///< player upgrades that replace m_scatterRadius
+	AsciiString m_zeroScatterMarkerName;							///< a target carrying this marker (StickyBombUpdate) for the firer or an ally is hit with no scatter
+	const ThingTemplate* m_zeroScatterMarkerTmpl;			///< post-loaded m_zeroScatterMarkerName
+	LeadInterceptProfile m_leadProfile;								///< SAM lead interception (D-038); not valid for other weapons
+	Int m_clusterCount;																///< cluster warhead (D-048): bomblets its detonation spreads (0: a normal blast)
+	Real m_clusterRadius;															///< ... evenly over this radius around the detonation point
+	UnsignedInt m_clusterDelay;												///< ... landing within this many frames after it
+	AsciiString m_clusterWeaponName;									///< ... each dealing this weapon's damage and ProjectileDetonationFX
+	const WeaponTemplate* m_clusterWeapon;						///< post-loaded m_clusterWeaponName
+	Bool m_ignoresCountermeasures;									///< (D-055) its missiles are never diverted by countermeasure flares
+	Bool m_scaleDetonationFX;												///< (D-060) play ProjectileDetonationFX scaled by this blast's damage
+	Bool m_fxAtTarget;															///< (D-148) FireFX / detonation FX at the target point (a launcher cook-off fired by its facility)
+	Real m_fxScale;																	///< (D-148) fixed size factor of its FireFX and detonation FX (1 = as authored)
+	AsciiString m_clusterCenterWeaponName;						///< (D-158) split warhead: the first (centre) warhead uses this weapon, on the aim point
+	const WeaponTemplate* m_clusterCenterWeapon;			///< post-loaded m_clusterCenterWeaponName
+	UnsignedInt m_clusterReleaseInterval;					///< (D-162) frames between one-by-one releases (0: burst at once)
+	Real m_clusterReleaseCarrierSpeed;						///< (D-162) fraction of its top speed the carrier slows to past the apex (1 = none)
+	Real m_clusterReleaseFinalSpeed;							///< (D-215) fraction of its top speed (may be > 1) the carrier reaches within 1 s after its last release (0 = none)
+	UnsignedInt m_clusterReleaseStart;						///< (D-162) > 0: the first release this many frames after the carrier starts its arc (after climb and pitch-over); 0: past the apex, ClusterReleaseLead before landing
+	UnsignedInt m_clusterReleaseLead;							///< (D-162) frames from the last release to the carrier's own impact
+	Bool m_clusterReleaseCarrierVanishes;					///< (D-245) after the last release the carrier is removed (no centre blast, no damage)
+	const FXList* m_clusterReleaseVanishFX;				///< (D-245) FX at the carrier when it vanishes (nullptr: none)
+	UnsignedInt m_clusterReleaseDropTime;					///< (D-261) > 0: frames each released warhead falls, leaving level (0: timed to the carrier's landing, D-162)
+	Real m_clusterReleaseConeSpeed;								///< (D-267) > 0 (with DropTime): all warheads leave in one frame and fly a cone at about this mean speed (dist/frame)
+	Real m_clusterReleaseConeInherit;							///< (D-267) how much of the carrier's velocity their start keeps
+	Real m_hitChance;																///< (D-147) chance that a hit affects an airborne target without its own HitChanceBehavior (1 = always)
 
 	mutable HistoricWeaponDamageList m_historicDamage;
 	mutable UnsignedInt m_historicDamageTriggerId;
@@ -865,7 +1017,7 @@ protected:
 
 	void deleteAllDelayedDamage();
 	void resetWeaponTemplates();
-	void setDelayedDamage(const WeaponTemplate *weapon, const Coord3D* pos, UnsignedInt whichFrame, ObjectID sourceID, ObjectID victimID, const WeaponBonus& bonus);
+	void setDelayedDamage(const WeaponTemplate *weapon, const Coord3D* pos, UnsignedInt whichFrame, ObjectID sourceID, ObjectID victimID, const WeaponBonus& bonus, Bool playDetonationFX = FALSE);
 
 private:
 
@@ -884,6 +1036,7 @@ private:
 		ObjectID m_delaySourceID;										///< who dealt the damage (by ID since it might be dead due to delay)
 		ObjectID m_delayIntendedVictimID;						///< who the damage was intended for (or zero if no specific target)
 		WeaponBonus m_bonus;												///< the weapon bonus to use
+		Bool m_playDetonationFX;										///< Hypersonic @feature (D-048) a cluster bomblet: play the weapon's ProjectileDetonationFX there
 	};
 
 	std::vector<WeaponTemplate*> m_weaponTemplateVector;

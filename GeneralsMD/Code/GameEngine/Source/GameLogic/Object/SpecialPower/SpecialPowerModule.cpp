@@ -43,6 +43,7 @@
 #include "Common/Xfer.h"
 
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/HypersonicScenario.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/DeletionUpdate.h"
 #include "GameLogic/Module/UpdateModule.h"
@@ -260,6 +261,21 @@ const SpecialPowerTemplate * SpecialPowerModule::getSpecialPowerTemplate() const
 }
 
 //-------------------------------------------------------------------------------------------------
+// Hypersonic @feature (D-163) a power with MinimumRange refuses targets closer than that to this object (2D):
+// the cursor shows the invalid-target cursor and OCLSpecialPower refuses such a command in the logic.
+//-------------------------------------------------------------------------------------------------
+Bool SpecialPowerModule::isValidTargetLocation( const Coord3D *loc ) const
+{
+	const SpecialPowerTemplate *power = getSpecialPowerTemplate();
+	if( loc == nullptr || power == nullptr || power->getMinimumRange() <= 0.0f )
+		return TRUE;
+	const Coord3D *pos = getObject()->getPosition();
+	const Real dx = loc->x - pos->x;
+	const Real dy = loc->y - pos->y;
+	return dx*dx + dy*dy >= power->getMinimumRange() * power->getMinimumRange();
+}
+
+//-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
 AsciiString SpecialPowerModule::getPowerName() const
 {
@@ -379,6 +395,12 @@ Real SpecialPowerModule::getPercentReady() const
 
 Bool SpecialPowerModule::startsReady() const
 {
+	// Hypersonic @fix (D-246): retail compatibility suppresses StartsReady for stock
+	// powers. Gaza is new and must be ready on creation, not after its first 45 s.
+	if (getSpecialPowerTemplate()->getSpecialPowerType() == SPECIAL_IRAN_ALMAS_STRIKE ||
+		getSpecialPowerTemplate()->getSpecialPowerType() == SPECIAL_IRAN_GAZA_GUARD ||
+		getSpecialPowerTemplate()->getSpecialPowerType() == SPECIAL_IRAN_GAZA_RELEASE)
+		return getSpecialPowerModuleData()->m_startsReady;
 #if RETAIL_COMPATIBLE_CRC
 	return false;
 #endif
@@ -577,7 +599,26 @@ void SpecialPowerModule::aboutToDoSpecialPower( const Coord3D *location )
   // Ian: But now there are different Eva messages depending on who launched
 	//if (localPlayer != getObject()->getControllingPlayer() && localPlayer->getRelationship(getObject()->getTeam()) != ENEMIES)
   {
-		if( type == SPECIAL_PARTICLE_UPLINK_CANNON || type == SUPW_SPECIAL_PARTICLE_UPLINK_CANNON || type == LAZR_SPECIAL_PARTICLE_UPLINK_CANNON )
+		// Hypersonic @feature (D-163) a power may name the EVA events its allies and enemies hear when it is launched
+		// (Khorramshahr: a warning siren instead of "SCUD Storm launched"); the owner's own event stays the stock one.
+		// Client-side only (EVA), like the stock choice below.
+		const SpecialPowerTemplate *spTemplate = getSpecialPowerModuleData()->m_specialPowerTemplate;
+		EvaMessage overrideEva = EVA_Invalid;
+		if( localPlayer != getObject()->getControllingPlayer() )
+		{
+			const AsciiString &name = relationship != ENEMIES ? spTemplate->getEvaLaunchedAlly() : spTemplate->getEvaLaunchedEnemy();
+			if( name.isNotEmpty() )
+				overrideEva = Eva::nameToMessage( name );
+		}
+		if( TheHypersonicScenario && ( spTemplate->getEvaLaunchedAlly().isNotEmpty() || spTemplate->getEvaLaunchedEnemy().isNotEmpty() ) )
+			TheHypersonicScenario->noteAI( "EVA launched %s: owner hears the stock own event, allies %s, enemies %s",
+				spTemplate->getName().str(), spTemplate->getEvaLaunchedAlly().str(), spTemplate->getEvaLaunchedEnemy().str() );
+
+		if( overrideEva != EVA_Invalid )
+		{
+			TheEva->setShouldPlay( overrideEva );
+		}
+		else if( type == SPECIAL_PARTICLE_UPLINK_CANNON || type == SUPW_SPECIAL_PARTICLE_UPLINK_CANNON || type == LAZR_SPECIAL_PARTICLE_UPLINK_CANNON )
     {
       if ( localPlayer == getObject()->getControllingPlayer() )
       {

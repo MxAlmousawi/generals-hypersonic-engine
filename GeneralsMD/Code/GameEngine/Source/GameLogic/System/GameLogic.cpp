@@ -33,6 +33,8 @@
 #include "Common/AudioHandleSpecialValues.h"
 #include "Common/BuildAssistant.h"
 #include "Common/CRCDebug.h"
+#include "Common/HangWatch.h"
+#include "Common/OptionPreferences.h"	// Hypersonic @fix (D-223) camera zoom-out choice
 #include "Common/FramePacer.h"
 #include "Common/GameAudio.h"
 #include "Common/GameEngine.h"
@@ -84,6 +86,8 @@
 #include "GameLogic/CrateSystem.h"
 #include "GameLogic/FPUControl.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/HypersonicScenario.h"
+#include "GameLogic/HypersonicCRCLog.h"
 #include "GameLogic/Locomotor.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/AIUpdate.h"
@@ -1131,6 +1135,64 @@ void GameLogic::setGameMode( GameMode mode )
 /** Entry point for starting a new game, the engine is already in clean state at this
 	* point and ready to load up with all the data */
 // ------------------------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------------------------
+// Hypersonic @feature Iran AI on any map (Generals Hypersonic D-146 part B): a skirmish AI player only plays when the
+// map has a side of its faction (the stock maps' SkirmishAmerica, SkirmishChina, ...; Player::initFromDict), whose
+// scripts then come from SkirmishScripts.scb by the side's name. Our build adds a SkirmishIran side to the stock maps
+// (tools/iran_ai.py); custom and downloaded maps lack it, so an Iran AI stayed idle there. Before the map's sides become
+// the skirmish sides, a map without any Iran side gets the same SkirmishIran side and its default team the build
+// tool adds (not saved into the map). Maps that already have an Iran side are not touched. Every machine loads the
+// same map with the same rules, so this is deterministic in multiplayer.
+// ------------------------------------------------------------------------------------------------
+static Bool addMissingIranSkirmishSide()
+{
+	static const char *IRAN_SKIRMISH_PLAYER = "SkirmishIran";
+	static const char *IRAN_FACTION = "FactionIran";
+	static const char *IRAN_SIDE = "Iran";
+
+	const PlayerTemplate *iranTemplate = ThePlayerTemplateStore->findPlayerTemplate( NAMEKEY( IRAN_FACTION ) );
+	if( iranTemplate == nullptr || TheSidesList->getNumSides() >= MAX_PLAYER_COUNT )
+		return FALSE;
+
+	Bool hasSkirmishSide = FALSE;
+	for( Int i = 0; i < TheSidesList->getNumSides(); ++i )
+	{
+		const Dict *d = TheSidesList->getSideInfo( i )->getDict();
+		AsciiString name = d->getAsciiString( TheKey_playerName );
+		if( name == IRAN_SKIRMISH_PLAYER )
+			return FALSE;
+		const PlayerTemplate *pt = ThePlayerTemplateStore->findPlayerTemplate( NAMEKEY( d->getAsciiString( TheKey_playerFaction ) ) );
+		if( pt != nullptr && pt->getSide() == IRAN_SIDE )
+			return FALSE;
+		if( name.startsWith( "Skirmish" ) )
+			hasSkirmishSide = TRUE;
+	}
+	if( !hasSkirmishSide )
+		return FALSE;	// not a skirmish map (no skirmish AI sides at all): leave it alone
+
+	Dict side;
+	side.setAsciiString( TheKey_playerName, IRAN_SKIRMISH_PLAYER );
+	side.setBool( TheKey_playerIsHuman, false );
+	side.setUnicodeString( TheKey_playerDisplayName, UnicodeString( L"SkirmishIran" ) );
+	side.setAsciiString( TheKey_playerFaction, IRAN_FACTION );
+	side.setAsciiString( TheKey_playerAllies, AsciiString::TheEmptyString );
+	side.setAsciiString( TheKey_playerEnemies, AsciiString::TheEmptyString );
+	TheSidesList->addSide( &side );
+
+	AsciiString teamName;
+	teamName.format( "team%s", IRAN_SKIRMISH_PLAYER );
+	if( TheSidesList->findTeamInfo( teamName ) == nullptr )
+	{
+		Dict team;
+		team.setAsciiString( TheKey_teamName, teamName );
+		team.setAsciiString( TheKey_teamOwner, IRAN_SKIRMISH_PLAYER );
+		team.setBool( TheKey_teamIsSingleton, true );
+		TheSidesList->addTeam( &team );
+	}
+	DEBUG_LOG(( "Hypersonic: map has no Iran skirmish side, added %s (D-146)", IRAN_SKIRMISH_PLAYER ));
+	return TRUE;
+}
+
 void GameLogic::startNewGame( Bool loadingSaveGame )
 {
 	try
@@ -1148,6 +1210,7 @@ void GameLogic::startNewGame( Bool loadingSaveGame )
 
 void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 {
+	HangWatch::beginLongWork(); // Hypersonic @feature (D-274) Loading a map is not a hang.
 
 	#ifdef DUMP_PERF_STATS
 	__int64 startTime64;
@@ -1376,8 +1439,15 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 
 		if (TheGameEngine->isMultiplayerSession() || isSkirmishOrSkirmishReplay)
 		{
+			// Hypersonic @feature (D-146 part B) an Iran skirmish AI also on maps without a SkirmishIran side
+			const Bool addedIranSide = addMissingIranSkirmishSide();
 			// Saves off any player, and resets the sides to 0 players so we can add the skirmish players.
 			TheSidesList->prepareForMP_or_Skirmish();
+			// Hypersonic @fix (D-146 part B): a map with its own scripts skips SkirmishScripts.scb, which left the added
+			// side without scripts (a crash when an Iran AI was picked): load its scripts and teams from the standard file
+			// (an empty script list at worst); the map's own scripts are not touched
+			if( addedIranSide )
+				TheSidesList->loadStandardSkirmishScriptsForSide( AsciiString( "SkirmishIran" ) );
 		}
 
 		//DEBUG_LOG(("Starting LAN game with %d players", game->getNumPlayers()));
@@ -2047,7 +2117,10 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 
 
 
-				placeNetworkBuildingsForPlayer(i, slot, player, pt);
+				// Hypersonic @feature (D-049) the dev test harness places its own objects
+				// Hypersonic @feature (D-071 AI battle harness) except in an AI battle (normal start)
+				if (TheHypersonicScenario == nullptr || TheHypersonicScenario->isAIBattle())
+					placeNetworkBuildingsForPlayer(i, slot, player, pt);
 			}
 
 			updateLoadProgress(progressCount++);
@@ -2124,6 +2197,24 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 		pos.z = 0;
 		TheTacticalView->lookAt( &pos );
 		DEBUG_LOG(("Failed to find initial camera position waypoint %s", startingCamName.str()));
+	}
+
+	// Hypersonic @fix camera zoom-out option (Generals Hypersonic D-223): the shell map's scripted camera tour uses
+	// GameData's MaxCameraHeight; any other game uses the player's choice
+	{
+		Real wanted = TheGlobalData->m_gameDataMaxCameraHeight;
+		if( !isInShellGame() )
+		{
+			OptionPreferences pref;
+			if( pref.getCameraZoomOut() > 0.0f )
+				wanted = pref.getCameraZoomOut();
+		}
+		if( wanted > 0.0f && wanted != TheGlobalData->m_maxCameraHeight )
+		{
+			const Real oldMax = TheGlobalData->m_maxCameraHeight;
+			TheWritableGlobalData->m_maxCameraHeight = wanted;
+			TheTacticalView->applyMaxCameraHeightChange( oldMax, wanted );
+		}
 	}
 
 	// Set up the camera height based on the map height & globalData.
@@ -2404,9 +2495,15 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
     }
   }
 
+	// Hypersonic @feature (D-049) dev test harness: its players, scripts and setup
+	if (TheHypersonicScenario && !loadingSaveGame)
+		TheHypersonicScenario->onGameStarted();
+
 	//ReAllows quit menu to work during loading scene
 	//setGameLoading(FALSE);
 	setLoadingMap( FALSE );
+
+	HangWatch_logMatchHeader(loadingSaveGame); // Hypersonic @feature (D-274)
 
 #ifdef DUMP_PERF_STATS
 	GetPrecisionTimer(&endTime64);
@@ -2701,6 +2798,19 @@ void GameLogic::processCommandList( CommandList *list )
 					player?player->getPlayerDisplayName().str():L"<NONE>", crcIt->second));
 			}
 #endif // DEBUG_LOGGING
+			// Hypersonic @feature D-091 write the reported CRCs (only with the hypersonic_crc_log.txt marker)
+			{
+				Int crcPlayers[MAX_SLOTS * 2];
+				UnsignedInt crcValues[MAX_SLOTS * 2];
+				Int crcCount = 0;
+				for (CachedCRCMap::const_iterator crcIt = m_cachedCRCs.begin(); crcIt != m_cachedCRCs.end() && crcCount < MAX_SLOTS * 2; ++crcIt)
+				{
+					crcPlayers[crcCount] = crcIt->first;
+					crcValues[crcCount] = crcIt->second;
+					++crcCount;
+				}
+				HypersonicCRCLog::logMismatch(m_frame, crcCount, crcPlayers, crcValues, numPlayers);
+			}
 			TheNetwork->setSawCRCMismatch();
 		}
 	}
@@ -3681,6 +3791,9 @@ extern __int64 Total_Create_Render_Obj_Time;
 extern __int64 Total_Load_3D_Assets;
 #endif
 
+// Hypersonic @feature D-091: set by update() around a network CRC so getCRC() may log it
+static Bool s_hypersonicCRCLogRequest = FALSE;
+
 // ------------------------------------------------------------------------------------------------
 /** Update all objects in the world by invoking their update() methods. */
 // ------------------------------------------------------------------------------------------------
@@ -3767,7 +3880,12 @@ void GameLogic::update()
 
 	if (generateForSolo || generateForMP)
 	{
+		// Hypersonic @feature D-091 network CRC log (only with the hypersonic_crc_log.txt marker)
+		s_hypersonicCRCLogRequest = generateForMP;
 		m_CRC = getCRC( CRC_RECALC );
+		s_hypersonicCRCLogRequest = FALSE;
+		if (generateForMP)
+			HypersonicCRCLog::noteLocalCRC( m_frame, m_CRC );
 		bool isPlayback = (TheRecorder && TheRecorder->isPlaybackMode());
 
 		GameMessage *msg = newInstance(GameMessage)(GameMessage::MSG_LOGIC_CRC);
@@ -3914,7 +4032,10 @@ void GameLogic::update()
 
 	TheWeaponStore->UPDATE();
 	TheLocomotorStore->UPDATE();
-	TheVictoryConditions->UPDATE();
+	// Hypersonic @feature (D-049) no victory or defeat in a dev test scenario
+	// Hypersonic @feature (D-071/D-244): AI battles and real campaigns keep normal victory checks.
+	if (TheHypersonicScenario == nullptr || TheHypersonicScenario->isAIBattle() || TheHypersonicScenario->isCampaign())
+		TheVictoryConditions->UPDATE();
 
 	{
 		//Handle disabled statii (and re-enable objects once frame matches)
@@ -3930,6 +4051,10 @@ void GameLogic::update()
 
 
 
+
+	// Hypersonic @feature (D-049) dev test harness: timed commands and log
+	if (TheHypersonicScenario && !m_startNewGame)
+		TheHypersonicScenario->logicUpdate();
 
 	// increment world time
 	if (!m_startNewGame)
@@ -4149,6 +4274,7 @@ UnsignedInt GameLogic::getCRC( Int mode, AsciiString deepCRCFileName )
 	LatchRestore<Bool> latch(inCRCGen, !isInGameLogicUpdate());
 
 	XferCRC *xferCRC;
+	HypersonicCRCLog *crcLog = nullptr;	// Hypersonic D-091: records what is hashed; same CRC
 	AsciiString marker;
 	if (deepCRCFileName.isNotEmpty())
 	{
@@ -4173,7 +4299,15 @@ UnsignedInt GameLogic::getCRC( Int mode, AsciiString deepCRCFileName )
 		else
 #endif // DEBUG_CRC
 		{
-			xferCRC = NEW XferCRC;
+			if (s_hypersonicCRCLogRequest && isInGameLogicUpdate() && HypersonicCRCLog::wantFrame(m_frame))
+			{
+				crcLog = NEW HypersonicCRCLog(m_frame);
+				xferCRC = crcLog;
+			}
+			else
+			{
+				xferCRC = NEW XferCRC;
+			}
 			crcName = "lightCRC";
 		}
 		xferCRC->open(crcName);
@@ -4189,9 +4323,13 @@ UnsignedInt GameLogic::getCRC( Int mode, AsciiString deepCRCFileName )
 
 	marker = "MARKER:Objects";
 	xferCRC->xferAsciiString(&marker);
+	if (crcLog)
+		crcLog->record("S", "MARKER:Objects");
 	for( obj = m_objList; obj; obj=obj->getNextObject() )
 	{
 		xferCRC->xferSnapshot( obj );
+		if (crcLog)
+			crcLog->recordObject( obj );
 	}
 	UnsignedInt seed = GetGameLogicRandomSeedCRC();
 	if (isInGameLogicUpdate())
@@ -4207,9 +4345,25 @@ UnsignedInt GameLogic::getCRC( Int mode, AsciiString deepCRCFileName )
 	{
 		xferCRC->xferUnsignedInt( &seed );
 	}
+	if (crcLog)
+	{
+		char seedText[64];
+		sprintf(seedText, "seed seedcrc=%08X", (unsigned)seed);
+		crcLog->record("S", seedText);
+	}
 	marker = "MARKER:ThePartitionManager";
 	xferCRC->xferAsciiString(&marker);
+	if (crcLog)
+	{
+		crcLog->record("S", "MARKER:ThePartitionManager");
+		crcLog->beginChunks("ThePartitionManager");
+	}
 	xferCRC->xferSnapshot( ThePartitionManager );
+	if (crcLog)
+	{
+		crcLog->endChunks();
+		crcLog->record("S", "end=ThePartitionManager");
+	}
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC after partition manager for frame %d is 0x%8.8X", m_frame, xferCRC->getCRC()));
@@ -4231,7 +4385,17 @@ UnsignedInt GameLogic::getCRC( Int mode, AsciiString deepCRCFileName )
 
 	marker = "MARKER:ThePlayerList";
 	xferCRC->xferAsciiString(&marker);
+	if (crcLog)
+	{
+		crcLog->record("S", "MARKER:ThePlayerList");
+		crcLog->beginPlayers();
+	}
 	xferCRC->xferSnapshot( ThePlayerList );
+	if (crcLog)
+	{
+		crcLog->endPlayers();
+		crcLog->record("S", "end=ThePlayerList");
+	}
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC after PlayerList for frame %d is 0x%8.8X", m_frame, xferCRC->getCRC()));
@@ -4239,7 +4403,17 @@ UnsignedInt GameLogic::getCRC( Int mode, AsciiString deepCRCFileName )
 
 	marker = "MARKER:TheAI";
 	xferCRC->xferAsciiString(&marker);
+	if (crcLog)
+	{
+		crcLog->record("S", "MARKER:TheAI");
+		crcLog->beginChunks("TheAI");
+	}
 	xferCRC->xferSnapshot( TheAI );
+	if (crcLog)
+	{
+		crcLog->endChunks();
+		crcLog->record("S", "end=TheAI");
+	}
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC after AI for frame %d is 0x%8.8X", m_frame, xferCRC->getCRC()));
@@ -4255,6 +4429,9 @@ UnsignedInt GameLogic::getCRC( Int mode, AsciiString deepCRCFileName )
 	xferCRC->close();
 
 	UnsignedInt theCRC = xferCRC->getCRC();
+
+	if (crcLog)
+		crcLog->finish(theCRC, seed);
 
 	delete xferCRC;
 	xferCRC = nullptr;

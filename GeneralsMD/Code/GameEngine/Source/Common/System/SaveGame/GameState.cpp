@@ -32,9 +32,11 @@
 #include "Common/file.h"
 #include "Common/FileSystem.h"
 #include "Common/GameEngine.h"
+#include "Common/HangWatch.h"
 #include "Common/GameState.h"
 #include "Common/GameStateMap.h"
 #include "Common/LatchRestore.h"
+#include "Common/LocalFileSystem.h"	// Hypersonic @feature (D-146)
 #include "Common/MapObject.h"
 #include "Common/PlayerList.h"
 #include "Common/RandomValue.h"
@@ -543,6 +545,7 @@ AsciiString GameState::findNextSaveFilename( UnicodeString desc )
 SaveResult GameState::saveGame( AsciiString filename, UnicodeString desc,
 													SaveFileType saveType, SnapshotType which )
 {
+	HangWatch::beginLongWork();	// Hypersonic @feature (D-274) saving is not a hang
 
 	// if there is no filename, this is a new file being created, find an appropriate filename
 	if( filename.isEmpty() )
@@ -638,6 +641,7 @@ SaveResult GameState::missionSave()
 // ------------------------------------------------------------------------------------------------
 SaveCode GameState::loadGame( AvailableGameInfo gameInfo )
 {
+	HangWatch::beginLongWork(); // Hypersonic @feature (D-274) Loading a save is not a hang.
 
 	// sanity check for file
 	if( doesSaveGameExist( gameInfo.filename ) == FALSE )
@@ -923,6 +927,12 @@ AsciiString GameState::realMapPathToPortableMapPath(const AsciiString& in) const
 		prefix = PORTABLE_USER_MAPS;
 		prefix.concat(getMapLeafAndDirName(in));
 	}
+	// Hypersonic @feature (D-146) a vanilla Zero Hour user map has the same portable name as one in our user Maps folder
+	else if (TheMapCache->isVanillaUserMap(in))
+	{
+		prefix = PORTABLE_USER_MAPS;
+		prefix.concat(getMapLeafAndDirName(in));
+	}
 	else
 	{
 		DEBUG_CRASH(("Map file was not found in any of the expected directories; this is impossible"));
@@ -935,7 +945,7 @@ AsciiString GameState::realMapPathToPortableMapPath(const AsciiString& in) const
 }
 
 // ------------------------------------------------------------------------------------------------
-AsciiString GameState::portableMapPathToRealMapPath(const AsciiString& in) const
+AsciiString GameState::portableMapPathToRealMapPath(const AsciiString& in, Bool forWriting) const
 {
 	AsciiString prefix;
 	// The directory where the real map path should be contained in.
@@ -962,6 +972,21 @@ AsciiString GameState::portableMapPathToRealMapPath(const AsciiString& in) const
 		prefix.concat("\\");
 		containingBasePath = prefix;
 		prefix.concat(getMapLeafAndDirName(in));
+
+		// Hypersonic @feature (D-146) not in our user Maps folder: read the vanilla Zero Hour copy if there is one
+		const AsciiString vanillaMapDir = TheMapCache->getVanillaUserMapDir();
+		if (!forWriting && !vanillaMapDir.isEmpty() && !TheLocalFileSystem->doesFileExist(prefix.str()))
+		{
+			AsciiString vanillaPath = vanillaMapDir;
+			vanillaPath.concat("\\");
+			AsciiString vanillaBasePath = vanillaPath;
+			vanillaPath.concat(getMapLeafAndDirName(in));
+			if (TheLocalFileSystem->doesFileExist(vanillaPath.str()))
+			{
+				prefix = vanillaPath;
+				containingBasePath = vanillaBasePath;
+			}
+		}
 	}
 	else
 	{

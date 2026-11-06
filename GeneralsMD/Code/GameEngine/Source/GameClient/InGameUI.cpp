@@ -27,7 +27,8 @@
 // Author: Michael S. Booth, March 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+#include "GameLogic/Module/JetAIUpdate.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_SHADOW_NAMES
 
@@ -54,6 +55,7 @@
 #include "GameClient/DisplayStringManager.h"
 #include "GameClient/Diplomacy.h"
 #include "GameClient/Eva.h"
+#include "GameLogic/HypersonicScenario.h"
 #include "GameClient/GameText.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/Drawable.h"
@@ -158,6 +160,10 @@ static Bool kindOfUnitSelection( Drawable *test, void *userData )
 		if (!object)
 			return FALSE;
 
+		const JetAIUpdate* jet = object->getAI() ? object->getAI()->getJetAIUpdate() : nullptr;
+		if (jet && jet->isGazaGuarding())
+			return FALSE; // Hypersonic D-246: Q and select-all-aircraft on screen/map
+
 		Bool isKindOfMatch = object->isKindOfMulti(data->m_mustbeSet, data->m_mustbeClear);
 
 		// only select objects if not already selected
@@ -213,6 +219,10 @@ static Bool similarUnitSelection( Drawable *test, void *userData )
 		// safe unless you've verified that there is a valid object.
 		if (!object)
 			return FALSE;
+
+		const JetAIUpdate* jet = object->getAI() ? object->getAI()->getJetAIUpdate() : nullptr;
+		if (jet && jet->isGazaGuarding())
+			return FALSE; // Hypersonic D-246 (Codex review): double-click select-same-type skips guarding Gazas too
 
 		Bool isEquivalent = object->getTemplate()->isEquivalentTo( selectedType );
 		if( data->isCarBomb && !isEquivalent && object->testStatus( OBJECT_STATUS_IS_CARBOMB ) )
@@ -1479,7 +1489,8 @@ void InGameUI::setRadiusCursor(RadiusCursorType cursorType, const SpecialPowerTe
 			radius = w ? w->getContinueAttackRange() : 0.0f;
 			break;
 		case RADIUSCURSOR_GUARD_AREA:
-			radius = AIGuardMachine::getStdGuardRange(obj);
+			radius = obj->getAI() && obj->getAI()->getJetAIUpdate() && obj->getAI()->getJetAIUpdate()->supportsGazaGuard()
+				? obj->getVisionRange() : AIGuardMachine::getStdGuardRange(obj);
 			break;
 		case RADIUSCURSOR_FRIENDLY_SPECIALPOWER:
 		case RADIUSCURSOR_OFFENSIVE_SPECIALPOWER:
@@ -3986,7 +3997,14 @@ void InGameUI::postDraw()
                     {
                       if ( localPlayer == owningObject->getControllingPlayer() )
                       {
-                        TheEva->setShouldPlay(EVA_SuperweaponReady_Own_ScudStorm);
+                        // Hypersonic @feature (D-163) a SCUD-Storm-type power may name its owner's "ready" event
+                        // (Khorramshahr: a short alert, not "SCUD Storm ready"); a real SCUD Storm keeps the stock one
+                        const AsciiString &readyName = module->getSpecialPowerTemplate()->getEvaReadyOwn();
+                        EvaMessage readyMsg = readyName.isNotEmpty() ? Eva::nameToMessage( readyName ) : EVA_Invalid;
+                        TheEva->setShouldPlay( readyMsg != EVA_Invalid ? readyMsg : EVA_SuperweaponReady_Own_ScudStorm );
+                        if( TheHypersonicScenario )
+                          TheHypersonicScenario->noteAI( "EVA ready %s (own): %s", module->getSpecialPowerTemplate()->getName().str(),
+                            Eva::messageToName( readyMsg != EVA_Invalid ? readyMsg : EVA_SuperweaponReady_Own_ScudStorm ).str() );
                       }
                       else if ( localPlayer->getRelationship(owningObject->getTeam()) != ENEMIES )
                       {
@@ -3995,7 +4013,10 @@ void InGameUI::postDraw()
                       }
                       else
                       {
-                        TheEva->setShouldPlay(EVA_SuperweaponReady_Enemy_ScudStorm);
+                        // Hypersonic @feature (D-232) the Khorramshahr names its enemies' "ready" event too
+                        const AsciiString &enemyName = module->getSpecialPowerTemplate()->getEvaReadyEnemy();
+                        EvaMessage enemyMsg = enemyName.isNotEmpty() ? Eva::nameToMessage( enemyName ) : EVA_Invalid;
+                        TheEva->setShouldPlay( enemyMsg != EVA_Invalid ? enemyMsg : EVA_SuperweaponReady_Enemy_ScudStorm );
                       }
                     }
                   }
@@ -4812,6 +4833,9 @@ Bool InGameUI::canSelectedObjectsDoSpecialPower( const CommandButton *command, c
 	//3) NEED_TARGET_POS
 	Bool doAtPosition = BitIsSet( command->getOptions(), NEED_TARGET_POS );
 	Bool doAtObject = BitIsSet( command->getOptions(), COMMAND_OPTION_NEED_OBJECT_TARGET );
+	// D-246 Almas permits both an object and bare ground; object flags are alternatives.
+	if (spTemplate->getSpecialPowerType() == SPECIAL_IRAN_ALMAS_STRIKE && !objectToInteractWith)
+		doAtObject = FALSE;
 
 	//Sanity checks
 	if( doAtObject && !objectToInteractWith )

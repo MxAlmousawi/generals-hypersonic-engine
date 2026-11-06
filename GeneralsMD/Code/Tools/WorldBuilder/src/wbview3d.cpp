@@ -273,7 +273,7 @@ public:
 	virtual enum FilterModes	 getViewFilterMode() override {return (enum FilterModes)0;}			///< Turns on viewport special effect (black & white mode)
 	virtual enum FilterTypes	 getViewFilterType() override {return (enum FilterTypes)0;}			///< Turns on viewport special effect (black & white mode)
 
-	virtual void shake( const Coord3D *epicenter, CameraShakeType shakeType ) override {};
+	virtual void shake( const Coord3D *epicenter, CameraShakeType shakeType, Real intensityScale = 1.0f ) override {};
 
 	virtual Real getFXPitch() const override { return 1.0f; }
 	virtual void forceCameraAreaConstraintRecalc() override { }

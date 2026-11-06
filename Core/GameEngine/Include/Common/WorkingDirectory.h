@@ -35,6 +35,15 @@ public:
 	// Returns true after a setter successfully changes the working directory.
 	static Bool hasSetWorkingDirectory();
 
+	// Hypersonic @feature (D-134) The mod's exe may live in its own folder, outside the game folder. When the
+	// executable directory holds no game data, find the game folder (startup working directory, HypersonicZH.ini
+	// "GameDir=" next to the exe, HKCU "Software\Generals Hypersonic" GameDir, the retail InstallPath), make it
+	// the working directory and add it to the DLL search path (mss32.dll, binkw32.dll). FALSE when the executable
+	// directory is the game folder (the caller then uses it); without any game folder it shows an error and exits.
+	static Bool setGameDataWorkingDirectory();
+	// Directory of the running executable with a trailing backslash; FALSE on failure.
+	static Bool getExecutableDirectory(Char *buffer, size_t size);
+
 private:
 	friend struct WorkingDirectoryInitializer;
 

@@ -122,6 +122,16 @@ public:
 	Real getViewObjectRange() const { return getFO()->m_viewObjectRange; }
 	Real getRadiusCursorRadius() const { return getFO()->m_radiusCursorRadius; }
 	Bool isShortcutPower() const { return getFO()->m_shortcutPower; }
+	// Hypersonic @feature (D-163) no target closer than this to the source object (0 = no limit)
+	Real getMinimumRange() const { return getFO()->m_minimumRange; }
+	// Hypersonic @feature (D-163) EVA events allies / enemies hear when this power is launched (empty = the stock choice)
+	const AsciiString &getEvaLaunchedAlly() const { return getFO()->m_evaLaunchedAlly; }
+	const AsciiString &getEvaLaunchedEnemy() const { return getFO()->m_evaLaunchedEnemy; }
+	// Hypersonic @feature (D-163) EVA event the owner hears when it is ready, enemies when its building is detected
+	const AsciiString &getEvaReadyOwn() const { return getFO()->m_evaReadyOwn; }
+	const AsciiString &getEvaDetectedEnemy() const { return getFO()->m_evaDetectedEnemy; }
+	// Hypersonic @feature (D-232) EVA event enemies hear when it is ready (empty = stock)
+	const AsciiString &getEvaReadyEnemy() const { return getFO()->m_evaReadyEnemy; }
 	AcademyClassificationType getAcademyClassificationType() const { return m_academyClassificationType; }
 
 private:
@@ -144,6 +154,12 @@ private:
 	Bool							m_publicTimer;				///< display a countdown timer for this special power for all to see
 	Bool							m_sharedNSync;				///< If true, this is a special that is shared between all of a player's command centers
 	Bool							m_shortcutPower;		///< Is this shortcut power capable of being fired by the side panel?
+	Real							m_minimumRange;			///< Hypersonic @feature (D-163) minimum 2D distance from the source to the target
+	AsciiString				m_evaLaunchedAlly;		///< Hypersonic @feature (D-163) EVA event for allies when launched (empty = stock)
+	AsciiString				m_evaLaunchedEnemy;		///< Hypersonic @feature (D-163) EVA event for enemies when launched (empty = stock)
+	AsciiString				m_evaReadyOwn;			///< Hypersonic @feature (D-163) EVA event for the owner when ready (empty = stock)
+	AsciiString				m_evaDetectedEnemy;		///< Hypersonic @feature (D-163) EVA event for enemies when detected (empty = stock)
+	AsciiString				m_evaReadyEnemy;		///< Hypersonic @feature (D-232) EVA event for enemies when ready (empty = stock)
 
 	static const FieldParse m_specialPowerFieldParse[];		///< the parse table
 

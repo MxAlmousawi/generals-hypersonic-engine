@@ -215,8 +215,10 @@ public:
 
 	virtual void setHeightAboveGround(Real z) override;
 	virtual void setZoom(Real z) override;
+	virtual void applyMaxCameraHeightChange( Real oldMax, Real newMax ) override;	///< Hypersonic @feature (D-223)
 	virtual void setZoomToDefault() override;									///< Set zoom to default value
 
+	virtual void setFreeCamera( const Coord3D *eye, const Coord3D *target, Real fovDegrees ) override;	///< Hypersonic @feature (D-272)
 	virtual void setFieldOfView( Real angle ) override;							///< Set the horizontal field of view angle
 
   virtual WorldToScreenReturn worldToScreenTriReturn( const Coord3D *w, ICoord2D *s ) override;	///< Transform world coordinate "w" into screen coordinate "s"
@@ -233,7 +235,7 @@ public:
 	virtual void setSnapMode( CameraLockType lockType, Real lockDist ) override;
 
 	/// Add an impulse force to shake the camera
-	virtual void shake( const Coord3D *epicenter, CameraShakeType shakeType ) override;
+	virtual void shake( const Coord3D *epicenter, CameraShakeType shakeType, Real intensityScale = 1.0f ) override;
 
 	virtual Real getFXPitch() const override { return m_FXPitch; }					///< returns the FX pitch angle
 
@@ -334,6 +336,10 @@ private:
 	void updateTerrain();
 
 	// (gth) C&C3 animation controlled camera feature
+	Bool				m_freeCamera;						///< Hypersonic @feature scenario free camera (D-272)
+	Vector3			m_freeCameraEye;
+	Vector3			m_freeCameraTarget;
+	Bool				m_freeCameraLens;					///< the free camera changed the lens: put it back when it ends
 	Bool				m_isCameraSlaved;
 	Bool				m_useRealZoomCam;
 	AsciiString		m_cameraSlaveObjectName;

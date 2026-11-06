@@ -142,6 +142,9 @@
 #include "GameLogic/Module/BaikonurLaunchPower.h"
 #include "GameLogic/Module/BattlePlanUpdate.h"
 #include "GameLogic/Module/LifetimeUpdate.h"
+#include "GameLogic/Module/CruiseFlightUpdate.h"
+#include "GameLogic/Module/MunitionMagazineUpdate.h"
+#include "GameLogic/Module/MissileLaunchSiteUpdate.h"
 #include "GameLogic/Module/RadiusDecalUpdate.h"
 #include "GameLogic/Module/AutoDepositUpdate.h"
 #include "GameLogic/Module/MissileAIUpdate.h"
@@ -212,6 +215,7 @@
 #include "GameLogic/Module/CostModifierUpgrade.h"
 #include "GameLogic/Module/ExperienceScalarUpgrade.h"
 #include "GameLogic/Module/MaxHealthUpgrade.h"
+#include "GameLogic/Module/HitChanceBehavior.h"
 
 // create includes
 #include "GameLogic/Module/LockWeaponCreate.h"
@@ -269,6 +273,7 @@
 #include "GameLogic/Module/SpecialAbility.h"
 #include "GameLogic/Module/SpyVisionSpecialPower.h"
 #include "GameLogic/Module/CashBountyPower.h"
+#include "GameLogic/Module/MunitionLaunchPower.h"
 #include "GameLogic/Module/CleanupAreaPower.h"
 #include "GameLogic/Module/FireWeaponPower.h"
 
@@ -396,6 +401,9 @@ void ModuleFactory::init()
 	addModule( ToppleUpdate );
 	addModule( EnemyNearUpdate );
 	addModule( LifetimeUpdate );
+	addModule( CruiseFlightUpdate );	// Hypersonic @feature fire-and-forget drone flight (D-042)
+	addModule( MunitionMagazineUpdate );	// Hypersonic @feature launch facility magazine and loader
+	addModule( MissileLaunchSiteUpdate );	// Hypersonic @feature missile facility TEL bays and silo gates
 	addModule( RadiusDecalUpdate );
 	addModule( EMPUpdate );
   addModule( LeafletDropBehavior );
@@ -490,6 +498,7 @@ void ModuleFactory::init()
 	addModule( WeaponBonusUpgrade );
 	addModule( ExperienceScalarUpgrade );
 	addModule( MaxHealthUpgrade );
+	addModule( HitChanceBehavior );	// Hypersonic @feature interception hit chance
 
 	// create modules
 	addModule( LockWeaponCreate );
@@ -548,6 +557,7 @@ void ModuleFactory::init()
 	addModule( SpecialAbility );
 	addModule( SpyVisionSpecialPower );
 	addModule( CashBountyPower );
+	addModule( MunitionLaunchPower );	// Hypersonic @feature launch facility launch power
 	addModule( CleanupAreaPower );
 
 	// destroy modules

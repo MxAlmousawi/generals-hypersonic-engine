@@ -135,6 +135,7 @@ const FieldParse ThingTemplate::s_objectFieldParseTable[] =
 	{ "FenceWidth",						INI::parseReal,												nullptr,		offsetof( ThingTemplate, m_fenceWidth ) },
 	{ "FenceXOffset",					INI::parseReal,												nullptr,		offsetof( ThingTemplate, m_fenceXOffset ) },
 	{ "IsBridge",							INI::parseBool,												nullptr,		offsetof( ThingTemplate, m_isBridge ) },
+	{ "VisibleToOwnerInFog",		INI::parseBool,												nullptr,		offsetof( ThingTemplate, m_visibleToOwnerInFog ) },	// Hypersonic @feature (D-213)
 	{ "ArmorSet",							ThingTemplate::parseArmorTemplateSet, nullptr, 0},
 	{ "WeaponSet",						ThingTemplate::parseWeaponTemplateSet,nullptr, 0},
 	{ "VisionRange",					INI::parseReal,												nullptr,		offsetof( ThingTemplate, m_visionRange ) },
@@ -984,6 +985,19 @@ void ThingTemplate::parseMaxSimultaneous(INI *ini, void *instance, void *store, 
   {
     myTemplate->m_maxSimultaneousDeterminedBySuperweaponRestriction = true;
     *(UnsignedShort *)store = 0;
+    // Hypersonic @feature (D-177) optional count allowed while superweapons are limited, e.g.
+    // "DeterminedBySuperweaponRestriction 2"; without it the stock limit of the restriction applies
+    const char *countToken = ini->getNextTokenOrNull();
+    if (countToken)
+    {
+      Int value = INI::scanInt(countToken);
+      if (value < 1 || value > 65535)
+      {
+        DEBUG_CRASH(("Bad value parseMaxSimultaneous"));
+        throw ERROR_BUG;
+      }
+      *(UnsignedShort *)store = (UnsignedShort)value;
+    }
   }
   else
   {
@@ -1040,6 +1054,7 @@ ThingTemplate::ThingTemplate() :
 	//m_defaultOwningSide = "";	// unnecessary
 	m_isBuildFacility = FALSE;
 	m_isPrerequisite = FALSE;
+	m_visibleToOwnerInFog = FALSE;	// Hypersonic @feature (D-213)
 	m_placementViewAngle = 0.0f;
 	m_factoryExitWidth = 0.0f;
 	m_factoryExtraBibWidth = 0.0f;
@@ -1482,7 +1497,11 @@ UnsignedInt ThingTemplate::getMaxSimultaneousOfType() const
 {
   if ( m_maxSimultaneousDeterminedBySuperweaponRestriction && TheGameLogic )
   {
-    return TheGameLogic->getSuperweaponRestriction();
+    UnsignedInt restriction = TheGameLogic->getSuperweaponRestriction();
+    // Hypersonic @feature (D-177) a template's own count replaces the restriction's limit (0 = unlimited stays)
+    if ( restriction != 0 && m_maxSimultaneousOfType != 0 )
+      return m_maxSimultaneousOfType;
+    return restriction;
   }
 
   return m_maxSimultaneousOfType;

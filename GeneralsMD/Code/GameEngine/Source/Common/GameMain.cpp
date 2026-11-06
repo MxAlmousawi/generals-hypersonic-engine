@@ -30,6 +30,7 @@
 
 #include "Common/FramePacer.h"
 #include "Common/GameEngine.h"
+#include "Common/HangWatch.h"
 #include "Common/ReplaySimulation.h"
 
 
@@ -47,6 +48,7 @@ Int GameMain()
 
 	if (!TheGlobalData->m_simulateReplays.empty())
 	{
+		HangWatch::shutdown("replay simulation"); // Hypersonic @feature (D-274) It does not use the main loop that sends the heartbeat.
 		exitcode = ReplaySimulation::simulateReplays(TheGlobalData->m_simulateReplays, TheGlobalData->m_simulateReplayJobs);
 	}
 	else
